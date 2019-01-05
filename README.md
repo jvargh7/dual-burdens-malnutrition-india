@@ -1,5 +1,8 @@
 # dual-burdens-malnutrition-india
-Malnutrition among women and children in India: limited evidence of clustering of underweight, anemia, overweight, and stunting within individuals and households at both state and district levels
+Malnutrition among women and children in India: limited evidence of clustering of underweight, anemia, overweight, and stunting within individuals and households at both state and district levels  
+
+Jithin Sam Varghese, Aryeh Stein
+
 
 Journal: American Journal of Clinical Nutrition  
 Submitted: September 2018  
