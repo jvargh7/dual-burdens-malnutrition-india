@@ -1,0 +1,509 @@
+---
+title: "Clustering of Burdens as Maps"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r}
+library(readxl)
+library(ggplot2)
+library(data.table)
+library(Hmisc)
+library(dplyr)
+library(tidyr)
+library(stringr)
+library(sp)
+library(rgdal)
+library(tmap)
+```
+
+```{r}
+path_shape_files <- "C:/Analysis/data/india/shape_files"
+path_india_documentation <- "C:/Analysis/dual_burden/india/documentation"
+path_india_data <- "C:/Analysis/data/india/nfhs_4/working"
+path_india_package <- "C:/Analysis/dual_burden/package"
+path_india_save <- "C:/Analysis/writing/dual_burden/data_sharing"
+
+
+```
+
+###1. Reading datasets
+```{r}
+district_map <- readxl::read_excel(paste0(path_india_documentation,"/variable_list.xlsx"),
+                                   sheet="district")
+state_map <- readxl::read_excel(paste0(path_india_documentation,"/variable_list.xlsx"),
+                                sheet="state")
+```
+
+```{r}
+load(paste0(path_india_data,"/summary_tables_20181111.RData"))
+```
+
+
+Source: https://github.com/datameet/maps
+```{r}
+
+shape_df <-  readOGR(paste0(path_shape_files,"/maps-master/Census_2011"),"2011_Dist")
+bound_df <- readOGR(paste0(path_shape_files,"/maps-master/States"),"Admin2")
+
+method="tmap"
+```
+
+###2. Preparing datasets for district
+
+
+
+```{r}
+format_files <- ls()
+district_format_files <- format_files[regexpr("format_by_",format_files)>0 &
+                                        regexpr("dist_",format_files)>0]
+
+
+
+district_format_files <- c( "dist_format_by_man_muw","dist_format_by_cst_can",
+                            "dist_format_by_cuw_muw","dist_format_by_cst_muw",
+                           "dist_format_by_can_man")
+n_district_format_files <- length(district_format_files)
+nrow_layout = 3
+i=0
+for(n_file in c(1:n_district_format_files)){
+  file_name <- district_format_files[n_file]
+  format_df <- get(file_name)
+  
+  burden_name <- str_replace(file_name,"format_by_","")
+  burden_name <- str_replace(burden_name,"_","-")
+  burden_name <- toupper(burden_name)
+  
+  
+  n_significant = district_table[district_table$burden_pair==burden_name,]$o_e_sig
+  
+  if(n_significant > 60){
+    
+    i = i + 1
+    title_figure=LETTERS[i]
+    
+    df=get(file_name)
+    value_var = "difference_positive_significant"
+    id_var="censuscode"
+    district=TRUE
+    state="India"
+    legend="Percentage (%)"
+    palette="RdYlGn"
+    direction=-1
+    
+    df <- merge(df,district_map,by="sdistri")
+    df$difference <- with(df, dual - expected_dual_proportion)
+    df$difference_positive <- with(df, ifelse(difference>0,difference,0))
+    df$difference_significant <- with(df, ifelse(!is.na(chisq_p) & 
+                                                   chisq_p<0.05,difference,NA))
+    df$difference_positive_significant <- with(df, ifelse(difference>0 & 
+                                                            !is.na(chisq_p) & 
+                                                            chisq_p<0.05,
+                                                          "Significant and Positive",NA))
+    
+    
+    palette <- ifelse(direction==-1,paste0("-",palette),palette)
+    
+    df[,"id2"]     <- df[,id_var]
+    df[,"value"]  <- df[,value_var]
+    
+    title <- str_replace(file_name,"dist_format_by_","")
+    title = str_replace_all(title,"m","w")
+    
+    
+    if(value_var=="difference"){
+      d_breaks = c(-10,-2,2,10)
+      if(method=="tmap"){
+        if(district==TRUE){
+          
+          if(!("India" %in% state)){
+            shape_df <- shape_df[shape_df$ST_NM %in% state,]
+            bound_df <- bound_df[bound_df$NAME_1 %in% state,]
+          }
+          shape_df2 <- sp::merge(shape_df,df[,c("id2","value")],
+                                 by.x="censuscode",by.y="id2",all.x=TRUE)
+          a <- tm_shape(shape_df2) + 
+            tm_borders() + tm_fill(title= "Observed-Expected (%)",
+                                   col="value",palette=paste0(palette),
+                                   breaks=d_breaks,
+                                   midpoint = NA,
+                                   textNA="Data not available",
+                                   colorNA = "white") + 
+            tm_shape(bound_df) + tm_borders(col="black") + 
+            tm_text(text="ST_NM",col="black",size=0.5,remove.overlap = TRUE)+
+            tm_legend(legend.position = c("right","top"),
+                      legend.outside=FALSE,
+                      legend.just=c("left","top"))+ 
+            tm_xlab("Longitude") +
+            tm_ylab("Latitude")  
+          a <- a + tm_layout(toupper(str_replace(title,"_","-")),title.size = 0.8)
+          
+          png_name <- paste0("tmap_district",
+                             str_replace(file_name,"dist_format_by",""),"_",
+                             value_var,
+                             ".png")
+          tmap_save(a,paste0(path_india_data,"/",png_name),height=2300/300)
+          
+        }
+        
+        print(a)
+        
+      }
+      if(method=="base"){
+        df$value_categories <- cut(df$value,breaks = d_breaks)
+        
+        shape_df2 <- sp::merge(shape_df,df[,c("id2","value_categories")],
+                               by.x="censuscode",by.y="id2",all.x=TRUE)
+        
+        pok <- shape_df[shape_df$censuscode==0,]
+        # aksai_chin <- shape_df[shape_df$censuscode==3,]
+        
+        
+        
+        png_name <- paste0("map_district_",
+                           title,"_",
+                           value_var)
+        
+        png(paste0(path_india_data,"/",png_name,".png"),width=3.25,height=3.25,
+            units="in",res=1200,pointsize = 2)
+        par(mar=c(2,2,2,2),xaxs = "i",yaxs = "i",cex.axis=1.3,cex.lab=1.4)
+        d_angle1 = c(45,120,135,NA)
+        d_density1= c(30,60,30,NA)
+        
+        d_angle2 = c(0,60,0,NA)
+        d_density2=c(0,60,0,NA)
+        plot(shape_df2,
+             density=d_density1[shape_df2$value_categories],
+             angle=d_angle1[shape_df2$value_categories],
+             col="gray",
+             border="gray50")
+        plot(shape_df2,
+             density=d_density2[shape_df2$value_categories],
+             angle=d_angle2[shape_df2$value_categories],
+             col="gray",
+             border="gray50",
+             add=TRUE)
+        plot(pok,
+             col="white",
+             border="gray50",
+             add=TRUE)
+        plot(bound_df,
+             col=NA,
+             border="black",
+             add=TRUE)
+        title(main = toupper(str_replace(title,"_","-")),
+              cex.main=3)
+        # par(xpd=TRUE)
+        
+        
+        dev.off()
+        
+        
+        
+        
+      }
+      
+    }
+    if(value_var=="difference_positive_significant"){
+      if(district==TRUE){
+        
+        if(!("India" %in% state)){
+          shape_df <- shape_df[shape_df$ST_NM %in% state,]
+          bound_df <- bound_df[bound_df$NAME_1 %in% state,]
+        }
+        shape_df2 <- sp::merge(shape_df,df[,c("id2","value")],
+                               by.x="censuscode",by.y="id2",all.x=TRUE)
+        a <- tm_shape(shape_df2) + 
+          tm_borders() + tm_fill(title= NA,
+                                 col="value",
+                                 palette="#000000",
+                                 legend.show=FALSE,
+                                 midpoint = NA,
+                                 textNA=NA,
+                                 colorNA = "white") + 
+          tm_shape(bound_df) + tm_borders(col="black") + 
+          # tm_text(text="ST_NM",col="black",size=0.5,remove.overlap = TRUE)+
+          tm_legend(legend.position = c("right","top"),
+                    legend.outside=FALSE,
+                    legend.just=c("left","top")) 
+        
+        # a <- a + tm_xlab("Longitude") + tm_ylab("Latitude")
+        # a <- a + tm_layout(toupper(str_replace(title,"_","-")),title.size = 0.8)
+        
+        a <- a + tm_layout(title_figure,title.size = 4)
+        
+        
+        png_name <- paste0("tmap_district_ds",
+                           str_replace(file_name,"dist_format_by",""),"_",
+                           value_var,
+                           ".png")
+        tmap_save(a,paste0(path_india_data,"/",png_name),height=2300/300,dpi=1200)
+        
+      }
+      
+      print(a)
+      
+    }
+    
+  }
+  
+}
+
+
+
+```
+
+
+###3. Preparing datasets for state
+
+```{r}
+format_files <- ls()
+state_format_files <- format_files[regexpr("format_by_",format_files)>0 &
+                                     regexpr("dist_",format_files)<0]
+
+n_state_format_files <- length(state_format_files)
+
+nrow_layout = 3
+i = 0
+
+for(n_file in c(1:n_state_format_files)){
+  file_name <- state_format_files[n_file]
+  format_df <- get(file_name)
+  
+  burden_name <- str_replace(file_name,"format_by_","")
+  burden_name <- str_replace(burden_name,"_","-")
+  burden_name <- toupper(burden_name)
+  
+  
+  n_significant = state_table[state_table$burden_pair==burden_name,]$o_e_sig
+  
+  if(n_significant > 10){
+    
+    i = i + 1
+    title_figure=LETTERS[i]
+    
+    df=get(file_name)
+    df=merge(df,state_map[,c("v024","smap_Admin2_state_name")])
+    value_var = "difference_positive_significant"
+    id_var="smap_Admin2_state_name"
+    district=FALSE
+    state="India"
+    legend="Percentage (%)"
+    
+    palette="RdYlGn"
+    direction=-1
+    
+    df$difference <- with(df, dual - expected_dual_proportion)
+    df$difference_positive <- with(df, ifelse(difference>0,difference,0))
+    df$difference_significant <- with(df, ifelse(!is.na(chisq_p) & 
+                                                   chisq_p<0.05,difference,NA))
+    df$difference_positive_significant <- with(df, ifelse(difference>0 & 
+                                                            !is.na(chisq_p) & 
+                                                            chisq_p<0.05,
+                                                          "Significant and Positive",NA))
+    
+    
+    palette <- ifelse(direction==-1,paste0("-",palette),palette)
+    
+    df[,"id2"]     <- df[,id_var]
+    df[,"value"]  <- df[,value_var]
+    
+    title <- str_replace(file_name,"format_by_","")
+    title = str_replace_all(title,"m","w")
+    
+    
+    if(value_var=="difference"){
+      s_breaks = c(-1,1,3,6)
+      if(method=="tmap"){
+        if(is.null(district)|district==FALSE){
+          
+          # shape_df <-  readOGR(paste0(path_shape_files,"/maps-master/States"),"Admin2")
+          if(!("India" %in% state)){
+            shape_df <- shape_df[shape_df$NAME_1 %in% state,]
+            bound_df <- bound_df[bound_df$NAME_1 %in% state,]
+          }
+          
+          shape_df2 <- sp::merge(bound_df,df[,c("id2","value")],by.y="id2",by.x="ST_NM",all.x=TRUE)
+          # bound_df <-  readOGR(paste0(path_shape_files,"/maps-master/Census_2011"),"2011_Dist")
+          
+          a <- tm_shape(shape_df2) + tm_borders() + tm_fill(title= "Observed-Expected (%)",
+                                                            col="value",style="fixed",
+                                                            breaks=s_breaks,
+                                                            palette=palette,
+                                                            midpoint = NA,
+                                                            textNA="Data not available",
+                                                            colorNA="white") + 
+            tm_text(text="ST_NM",size=0.3,col="darkgrey",remove.overlap = FALSE) +  
+            tm_xlab("Longitude") +
+            tm_ylab("Latitude")  
+          a <- a + tm_layout(toupper(str_replace(title,"_","-")),title.size = 0.8)
+          
+          png_name <- paste0("tmap_state",
+                             str_replace(file_name,"format_by",""),"_",
+                             value_var,
+                             ".png")
+          tmap_save(a,paste0(path_india_data,"/",png_name),height=2300/300)
+          
+        }
+        print(a)
+        
+        
+      }
+      
+      if(method=="base"){
+        df$value_categories <- cut(df$value,breaks = s_breaks)
+        shape_df2 <- sp::merge(bound_df,df[,c("id2","value_categories")],
+                               by.x="ST_NM",by.y="id2",all.x=TRUE)
+        
+        title <- str_replace(file_name,"format_by_","")
+        title = str_replace_all(title,"m","w")
+        
+        
+        png_name <- paste0("map_state_",
+                           title,"_",
+                           value_var,
+                           ".png")
+        
+        png(paste0(path_india_data,"/",png_name,".png"),width=3.25,height=3.25,
+            units="in",res=1200,pointsize = 2)
+        par(mar=c(2,2,2,2),xaxs = "i",yaxs = "i",cex.axis=1.3,cex.lab=1.4)
+        s_angle1 = c(45,120,135,NA)
+        s_density1= c(30,60,30,NA)
+        
+        s_angle2 = c(0,60,0,NA)
+        s_density2=c(0,60,0,NA)
+        
+        # plot(shape_df,
+        #      border="gray",
+        #      col="white")
+        # plot(shape_df2,
+        #      col="white",
+        #      add=TRUE)
+        plot(shape_df2,
+             density=s_density1[shape_df2$value_categories],
+             angle=s_angle1[shape_df2$value_categories],
+             col="gray",
+             border="black")
+        plot(shape_df2,
+             density=s_density2[shape_df2$value_categories],
+             angle=s_angle2[shape_df2$value_categories],
+             col="gray",
+             border="black",
+             add=TRUE)
+        title(main = toupper(str_replace(title,"_","-")),
+              cex.main=3)
+        
+        dev.off()
+      }
+      
+    }
+    
+    if(value_var=="difference_positive_significant"){
+      if(method=="tmap"){
+        if(is.null(district)|district==FALSE){
+          
+          # shape_df <-  readOGR(paste0(path_shape_files,"/maps-master/States"),"Admin2")
+          if(!("India" %in% state)){
+            shape_df <- shape_df[shape_df$NAME_1 %in% state,]
+            bound_df <- bound_df[bound_df$NAME_1 %in% state,]
+          }
+          
+          shape_df2 <- sp::merge(bound_df,df[,c("id2","value")],by.y="id2",by.x="ST_NM",all.x=TRUE)
+          # bound_df <-  readOGR(paste0(path_shape_files,"/maps-master/Census_2011"),"2011_Dist")
+          
+          a <- tm_shape(shape_df2) + tm_borders() + 
+            tm_fill(title= "Observed-Expected (%)",
+                    col="value",style="fixed",
+                    # breaks=s_breaks,
+                    palette="#6C6C6C",
+                    midpoint = NA,
+                    textNA="Zero, Negative or Non-Significant",
+                    colorNA="white") + 
+            tm_text(text="ST_NM",size=0.3,col="darkgrey",remove.overlap = FALSE) +  
+            tm_xlab("Longitude") +
+            tm_ylab("Latitude")  
+          a <- a + tm_layout(toupper(str_replace(title,"_","-")),title.size = 0.8)
+          
+          png_name <- paste0("tmap_state",
+                             str_replace(file_name,"format_by",""),"_",
+                             value_var,
+                             ".png")
+          tmap_save(a,paste0(path_india_data,"/",png_name),height=2300/300,dpi=1200)
+          
+        }
+        print(a)
+        
+        
+      }
+      
+    }
+    
+    
+  }
+}
+
+```
+
+
+###4. Preparing legend
+```{r}
+png_name = "map_legend_district"
+png(paste0(path_india_data,"/",png_name,".png"),width=9.75,height=2,
+    units="in",res=1200,pointsize = 2)
+plot.new()
+legend("center", legend=c("-10 to -2", "-2 to 2",
+                          "2 to 10","Data not available"), 
+       ncol=4, 
+       fill=c("gray","gray","gray","white"), 
+       angle=d_angle1,
+       density=d_density1,
+       cex=4,
+       title="Observed - Expected (%)")
+
+par(bg="transparent")
+
+legend("center", legend=c("-10 to -2", "-2 to 2",
+                          "2 to 10","Data not available"), 
+       ncol=4, 
+       fill=c("gray","gray","gray","white"), 
+       angle=d_angle2,
+       density=d_density2,
+       cex=4,
+       title="Observed - Expected (%)")
+dev.off()
+
+```
+
+```{r}
+png_name = "map_legend_state"
+png(paste0(path_india_data,"/",png_name,".png"),width=9.75,height=2,
+    units="in",res=1200,pointsize = 2)
+plot.new()
+legend("center", legend=c("-1 to 1", "1 to 3",
+                          "3 to 6","Data not available"), 
+       ncol=4, 
+       fill=c("gray","gray","gray","white"), 
+       angle=s_angle1,
+       density=s_density1,
+       cex=4,
+       title="Observed - Expected (%)")
+
+par(bg="transparent")
+
+legend("center", legend=c("-1 to 1", "1 to 3",
+                          "3 to 6","Data not available"), 
+       ncol=4, 
+       fill=c("gray","gray","gray","white"), 
+       angle=s_angle2,
+       density=s_density2,
+       cex=4,
+       title="Observed - Expected (%)")
+dev.off()
+
+```
+
+

@@ -1,0 +1,3561 @@
+---
+title: "Exploratory Analysis"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r}
+library(readxl)
+library(ggplot2)
+library(data.table)
+library(Hmisc)
+library(dplyr)
+library(tidyr)
+library(stringr)
+library(binom)
+library(gridExtra)
+library(grid)
+```
+
+```{r}
+path_india_documentation <- "C:/Analysis/dual_burden/india/documentation"
+path_india_data <- "C:/Analysis/data/india/nfhs_4/working"
+path_india_package <- "C:/Analysis/dual_burden/package"
+path_india_save <- "C:/Analysis/writing/dual_burden/data_sharing"
+
+
+
+
+```
+
+###1: Reading Child Recode- Anthro data
+```{r}
+child_anthro <- fread(paste0(path_india_data,"/IAIR71FL_child_anthro_v1.csv"))
+individual <- fread(paste0(path_india_data,"/IAIR71FL_dual_burden_v1.csv"))
+```
+
+```{r}
+individual[,d_muid := paste0(v001,sprintf("%02d",v002),sprintf("%02d",v003))]
+```
+
+
+```{r}
+individual <- individual[!duplicated(individual$d_muid),]
+individual <- individual %>% 
+  group_by(v024) %>% 
+  mutate(d_total_weight = sum(as.numeric(v005)/(10^6))) %>%
+  mutate(d_survey_prop = as.numeric(v005)/((10^6)*d_total_weight),
+         d_survey_weight = as.numeric(v005)/(10^6)) %>% 
+  ungroup() %>% select(-d_total_weight)
+```
+
+
+```{r}
+child_anthro[,d_cuid := paste0(v001,sprintf("%02d",v002),sprintf("%02d",v003),d_child_sno)]
+child_anthro[,d_cuid_var:= paste0(d_cuid,"_",d_variable)]
+
+# View(rbind(child_anthro[duplicated(child_anthro$d_cuid_var)],
+#            child_anthro[duplicated(child_anthro$d_cuid_var,fromLast = TRUE)]))
+#Same observations repeated
+```
+
+```{r}
+child_anthro <- child_anthro[!duplicated(child_anthro$d_cuid_var),]
+child_anthro <- reshape2::dcast(data=child_anthro,d_cuid ~ d_variable, value.var="d_value")
+child_anthro <- as.data.table(child_anthro)
+child_anthro[,d_muid := substr(d_cuid,1,str_length(d_cuid)-1)]
+
+child_anthro <- child_anthro[hw1>=6,]
+```
+
+Filtering youngest child
+```{r}
+child_anthro <- child_anthro %>% arrange(d_muid,hw1)
+child_anthro <- child_anthro[!duplicated(child_anthro$d_muid),]
+```
+
+```{r}
+individual <- as.data.table(individual)
+individual[,m_d_currently_pregnant:=ifelse(v454==1,1,0)]
+table(individual$m_d_currently_pregnant,useNA="always")
+individual = individual[m_d_currently_pregnant==0]
+```
+
+n = 158,064 children
+
+```{r}
+individual[,m_d_bmi:= ifelse(!is.na(v445) & v445>=1200 & v445<=6000, v445/100,NA)]
+individual[,m_d_bmi_category:= ifelse(!is.na(m_d_bmi),
+                            ifelse(m_d_bmi<18.5,"underweight",
+                                   ifelse(m_d_bmi>=25,"overweight","normal")),NA)]
+table(individual$m_d_bmi_category,useNA="always")
+
+```
+
+```{r}
+individual[,m_d_anemia := ifelse(!is.na(v457), 
+                       ifelse(v457 %in% c(1,2,3),"yes",
+                              ifelse(v457 == 4,"no","not measured")),NA)]
+table(individual$m_d_anemia,useNA="always")
+
+```
+
+Merging with mother data to obtain survey weights
+```{r}
+child_df <- merge(child_anthro,individual,by="d_muid")
+child_df <- as.data.table(child_df)
+```
+
+```{r}
+# child_df = child_df[hw1>=24]
+```
+
+###2. Creating outcome variables
+```{r}
+summary(child_df$hw4)
+child_df[,c_d_stunted := ifelse(hw5 < -600 | 
+                                  hw5 > 600, NA,
+                                ifelse(hw5 < -200,1,0))]
+table(child_df$c_d_stunted,useNA="always")
+```
+
+```{r}
+table(child_df$c_d_stunted, !is.na(child_df$hw5),useNA="always")
+```
+
+
+```{r}
+summary(child_df$hw7)
+child_df[,c_d_underweight_old := ifelse(hw8< -600 |
+                                      hw8 > 500, NA,
+                                ifelse(hw8 < -200,1,0))]
+table(child_df$c_d_underweight_old,useNA="always")
+```
+
+```{r}
+table(child_df$c_d_underweight_old, !is.na(child_df$hw8),useNA="always")
+```
+
+
+```{r}
+summary(child_df$hw10)
+child_df[,c_d_underweight := ifelse(hw11 < -500 | hw11 > 500, NA,
+                                ifelse(hw11 < -200,1,0))]
+table(child_df$c_d_underweight,useNA="always")
+```
+
+```{r}
+table(child_df$hw57,useNA="always")
+child_df[,c_d_anemia := ifelse(!is.na(hw57) & hw1>=6,
+                               ifelse(hw57 ==4, 0,1),NA)]
+table(child_df$c_d_anemia,useNA="always")
+```
+
+Missing Hb due to age under 6 months
+```{r}
+xtabs(~is.na(c_d_anemia) + (hw1>=6), data=child_df)
+```
+
+
+```{r}
+summary(child_df$hw7)
+# child_df[,c_d_overweight := ifelse(hw7>9980,NA,
+#                                    ifelse((hw7/10000) >=0.85 ,1,0))]
+child_df[,c_d_overweight := ifelse(hw11 < -500 | hw11 > 500, NA,
+                                ifelse(hw11 > 200,1,0))]
+table(child_df$c_d_overweight,useNA="always")
+# table(child_df$c_d_overweight,child_df$c_d_overweight2,useNA="always")
+
+```
+
+###3. Exploratory Plots
+
+```{r}
+child_df$m_d_overweight <- with(child_df,ifelse(!is.na(m_d_bmi_category),
+                                                ifelse(m_d_bmi_category=="overweight",1,0),NA))
+
+child_df$m_d_underweight <- with(child_df,ifelse(!is.na(m_d_bmi_category),
+                                                ifelse(m_d_bmi_category=="underweight",1,0),NA))
+
+child_df$m_d_anemia_yes <- with(child_df,ifelse(!is.na(m_d_anemia),
+                                                ifelse(m_d_anemia=="yes",1,0),NA))
+
+```
+
+
+```{r}
+child_df_summary <- 
+  child_df %>% 
+  group_by(v024) %>% 
+  dplyr::summarize(c_d_stunted = wtd.mean(c_d_stunted,w= d_survey_weight,na.rm=TRUE),
+                   c_d_underweight = wtd.mean(c_d_underweight,w=d_survey_weight,na.rm=TRUE),
+                   c_d_anemia = wtd.mean(c_d_anemia,w=d_survey_weight,na.rm=TRUE),
+                   c_d_overweight = wtd.mean(c_d_overweight,w=d_survey_weight,na.rm=TRUE),
+                   m_d_anemia_yes = wtd.mean(m_d_anemia_yes,w=d_survey_weight,na.rm=TRUE),
+                   m_d_overweight = wtd.mean(m_d_overweight,w=d_survey_weight,na.rm=TRUE),
+                   m_d_underweight = wtd.mean(m_d_underweight,w=d_survey_weight,na.rm=TRUE))
+
+dist_child_df_summary <- 
+  child_df %>% 
+  group_by(v024,sdistri) %>% 
+  dplyr::summarize(c_d_stunted = wtd.mean(c_d_stunted,w= d_survey_weight,na.rm=TRUE),
+                   c_d_underweight = wtd.mean(c_d_underweight,w=d_survey_weight,na.rm=TRUE),
+                   c_d_anemia = wtd.mean(c_d_anemia,w=d_survey_weight,na.rm=TRUE),
+                   c_d_overweight = wtd.mean(c_d_overweight,w=d_survey_weight,na.rm=TRUE),
+                   m_d_anemia_yes = wtd.mean(m_d_anemia_yes,w=d_survey_weight,na.rm=TRUE),
+                   m_d_overweight = wtd.mean(m_d_overweight,w=d_survey_weight,na.rm=TRUE),
+                   m_d_underweight = wtd.mean(m_d_underweight,w=d_survey_weight,na.rm=TRUE))
+
+```
+
+```{r}
+source("summary_tables.R")
+```
+
+```{r}
+child_df[,any_na:= ifelse(is.na(c_d_stunted)|
+                            is.na(c_d_underweight_old)|
+                            is.na(c_d_underweight)|
+                            is.na(c_d_overweight)|
+                            (is.na(c_d_anemia) & (hw1>=6)) |
+                            is.na(m_d_anemia)|
+                            is.na(m_d_bmi_category),1,0)]
+table(child_df$any_na)
+
+
+
+individual[,any_na:= ifelse(is.na(m_d_bmi_category) |
+                              is.na(m_d_anemia),1,0)]
+table(individual$any_na)
+```
+
+```{r}
+child_df <- child_df[!is.na(c_d_stunted) &
+                            !is.na(c_d_underweight_old) &
+                            !is.na(c_d_underweight) &
+                       !is.na(m_d_bmi_category)]
+
+individual <- individual[!is.na(m_d_bmi_category)]
+
+```
+
+###STATE LEVEL
+###4.1 Child level
+
+
+
+####1. CAn + COw
+
+Child Anaemia and Child Overweight
+
+Condition: Only for children 6-59 months
+```{r}
+child_df[,c_d_can_cow := ifelse(!is.na(c_d_anemia) & !is.na(c_d_overweight) 
+                                & !is.na(hw1) & hw1>=6,
+                                  ifelse(c_d_overweight==1,
+                                         ifelse(c_d_anemia==1,"dual","child_overweight"),
+                                         ifelse(c_d_anemia==1,"child_anemia","neither")),NA)]
+table(child_df$c_d_can_cow,useNA="always")
+
+```
+
+```{r}
+summary_by_can_cow <- child_df %>% 
+  group_by(v024, c_d_can_cow) %>%
+  summarise(count = sum(d_survey_weight), 
+            count_uw = n()) %>%
+  mutate(freq = count/sum(count)) 
+
+count_by_can_cow <- reshape2::dcast(data=summary_by_can_cow ,
+                                            v024~c_d_can_cow,value.var="count")
+
+count_uw_by_can_cow <- reshape2::dcast(data=summary_by_can_cow,
+                                        v024~c_d_can_cow,value.var="count_uw")
+
+summary_by_can_cow <- reshape2::dcast(data=summary_by_can_cow ,
+                                            v024~c_d_can_cow,value.var="freq")
+
+summary_by_can_cow[is.na(summary_by_can_cow)] <- 0
+count_by_can_cow[is.na(count_by_can_cow)] <- 0
+
+```
+
+Calculating expected number of cases and estimating Goodness-of-fit
+```{r}
+
+count_by_can_cow$expected_dual <- with(count_by_can_cow,
+                                       ((child_anemia + dual)*(child_overweight+dual))/
+                                         (child_anemia+dual+child_overweight+neither))
+
+count_by_can_cow$difference_observed_expected <- with(count_by_can_cow,
+                                                      dual-expected_dual)
+
+# count_by_can_cow = chisq_df(count_by_can_cow)
+count_uw_by_can_cow = chisq_df(count_uw_by_can_cow)
+
+```
+
+```{r}
+merge_vars <- c("v024","expected_dual","difference_observed_expected")
+                # ,"chisq_statistic","chisq_p"
+                
+summary_by_can_cow <- merge(summary_by_can_cow,count_by_can_cow[,merge_vars],by="v024")
+```
+
+
+
+
+
+####2. CSt + COw
+```{r}
+child_df[,c_d_cst_cow := ifelse(!is.na(c_d_stunted) & !is.na(c_d_overweight) 
+                                & !is.na(hw1),
+                                  ifelse(c_d_overweight==1,
+                                         ifelse(c_d_stunted==1,"dual","child_overweight"),
+                                         ifelse(c_d_stunted==1,"child_stunted","neither")),NA)]
+table(child_df$c_d_cst_cow,useNA="always")
+
+```
+
+```{r}
+summary_by_cst_cow <- child_df %>% 
+  group_by(v024, c_d_cst_cow) %>%
+  summarise(count = sum(d_survey_weight), 
+            count_uw = n()) %>%
+  mutate(freq = count/sum(count)) 
+
+count_by_cst_cow <- reshape2::dcast(data=summary_by_cst_cow ,
+                                            v024~c_d_cst_cow,value.var="count")
+
+
+count_uw_by_cst_cow <- reshape2::dcast(data=summary_by_cst_cow,
+                                        v024~c_d_cst_cow,value.var="count_uw")
+
+summary_by_cst_cow <- reshape2::dcast(data=summary_by_cst_cow ,
+                                            v024~c_d_cst_cow,value.var="freq")
+
+summary_by_cst_cow[is.na(summary_by_cst_cow)] <- 0
+count_by_cst_cow[is.na(count_by_cst_cow)] <- 0
+
+```
+
+Calculating expected number of cases and estimating Goodness-of-fit
+```{r}
+
+count_by_cst_cow$expected_dual <- with(count_by_cst_cow,
+                                       ((child_stunted + dual)*(child_overweight+dual))/
+                                         (child_stunted+dual+child_overweight+neither))
+
+count_by_cst_cow$difference_observed_expected <- with(count_by_cst_cow,
+                                                      dual-expected_dual)
+
+# count_by_cst_cow = chisq_df(count_by_cst_cow)
+count_uw_by_cst_cow = chisq_df(count_uw_by_cst_cow)
+
+```
+
+```{r}
+merge_vars <- c("v024","expected_dual","difference_observed_expected")
+                # ,"chisq_statistic","chisq_p"
+summary_by_cst_cow<- merge(summary_by_cst_cow,count_by_cst_cow[,merge_vars],by="v024")
+```
+
+
+####3. CSt + CUw
+```{r}
+child_df[,c_d_cst_cuw := ifelse(!is.na(c_d_stunted) & !is.na(c_d_underweight) 
+                                & !is.na(hw1),
+                                  ifelse(c_d_underweight==1,
+                                         ifelse(c_d_stunted==1,"dual","child_underweight"),
+                                         ifelse(c_d_stunted==1,"child_stunted","neither")),NA)]
+table(child_df$c_d_cst_cuw,useNA="always")
+
+```
+
+```{r}
+summary_by_cst_cuw <- child_df %>% 
+  group_by(v024, c_d_cst_cuw) %>%
+  summarise(count = sum(d_survey_weight), 
+            count_uw = n()) %>%
+  mutate(freq = count/sum(count)) 
+
+count_by_cst_cuw <- reshape2::dcast(data=summary_by_cst_cuw ,
+                                            v024~c_d_cst_cuw,value.var="count")
+
+
+count_uw_by_cst_cuw <- reshape2::dcast(data=summary_by_cst_cuw,
+                                        v024~c_d_cst_cuw,value.var="count_uw")
+
+summary_by_cst_cuw <- reshape2::dcast(data=summary_by_cst_cuw ,
+                                            v024~c_d_cst_cuw,value.var="freq")
+
+summary_by_cst_cuw[is.na(summary_by_cst_cuw)] <- 0
+count_by_cst_cuw[is.na(count_by_cst_cuw)] <- 0
+
+```
+
+Calculating expected number of cases and estimating Goodness-of-fit
+```{r}
+
+count_by_cst_cuw$expected_dual <- with(count_by_cst_cuw,
+                                       ((child_stunted + dual)*(child_underweight+dual))/
+                                         (child_stunted+dual+child_underweight+neither))
+
+count_by_cst_cuw$difference_observed_expected <- with(count_by_cst_cuw,
+                                                      dual-expected_dual)
+
+# count_by_cst_cuw = chisq_df(count_by_cst_cuw)
+count_uw_by_cst_cuw = chisq_df(count_uw_by_cst_cuw)
+
+```
+
+```{r}
+merge_vars <- c("v024","expected_dual","difference_observed_expected")
+                # ,"chisq_statistic","chisq_p"
+summary_by_cst_cuw<- merge(summary_by_cst_cuw,count_by_cst_cuw[,merge_vars],by="v024")
+```
+
+####4. CSt + CAn
+```{r}
+child_df[,c_d_cst_can := ifelse(!is.na(c_d_stunted) & !is.na(c_d_anemia) 
+                                & !is.na(hw1) & hw1>=6,
+                                  ifelse(c_d_anemia==1,
+                                         ifelse(c_d_stunted==1,"dual","child_anemia"),
+                                         ifelse(c_d_stunted==1,"child_stunted","neither")),NA)]
+table(child_df$c_d_cst_can,useNA="always")
+
+```
+
+```{r}
+summary_by_cst_can <- child_df %>% 
+  group_by(v024, c_d_cst_can) %>%
+  summarise(count = sum(d_survey_weight), 
+            count_uw = n()) %>%
+  mutate(freq = count/sum(count)) 
+
+count_by_cst_can <- reshape2::dcast(data=summary_by_cst_can ,
+                                            v024~c_d_cst_can,value.var="count")
+
+
+count_uw_by_cst_can <- reshape2::dcast(data=summary_by_cst_can,
+                                        v024~c_d_cst_can,value.var="count_uw")
+
+summary_by_cst_can <- reshape2::dcast(data=summary_by_cst_can ,
+                                            v024~c_d_cst_can,value.var="freq")
+
+summary_by_cst_can[is.na(summary_by_cst_can)] <- 0
+count_by_cst_can[is.na(count_by_cst_can)] <- 0
+
+```
+
+Calculating expected number of cases and estimating Goodness-of-fit
+```{r}
+
+count_by_cst_can$expected_dual <- with(count_by_cst_can,
+                                       ((child_stunted + dual)*(child_anemia+dual))/
+                                         (child_stunted+dual+child_anemia+neither))
+
+count_by_cst_can$difference_observed_expected <- with(count_by_cst_can,
+                                                      dual-expected_dual)
+
+# count_by_cst_can = chisq_df(count_by_cst_can)
+count_uw_by_cst_can = chisq_df(count_uw_by_cst_can)
+
+```
+
+```{r}
+merge_vars <- c("v024","expected_dual","difference_observed_expected")
+                # ,"chisq_statistic","chisq_p"
+summary_by_cst_can<- merge(summary_by_cst_can,count_by_cst_can[,merge_vars],by="v024")
+```
+
+
+####5. CAn + CUw
+```{r}
+child_df[,c_d_can_cuw := ifelse(!is.na(c_d_anemia) & !is.na(c_d_underweight) 
+                                & !is.na(hw1) & hw1>=6,
+                                  ifelse(c_d_anemia==1,
+                                         ifelse(c_d_underweight==1,"dual","child_anemia"),
+                                         ifelse(c_d_underweight==1,
+                                                "child_underweight","neither")),NA)]
+table(child_df$c_d_can_cuw,useNA="always")
+
+```
+
+```{r}
+summary_by_can_cuw <- child_df %>% 
+  group_by(v024, c_d_can_cuw) %>%
+  summarise(count = sum(d_survey_weight), 
+            count_uw = n()) %>%
+  mutate(freq = count/sum(count)) 
+
+count_by_can_cuw <- reshape2::dcast(data=summary_by_can_cuw ,
+                                            v024~c_d_can_cuw,value.var="count")
+
+
+count_uw_by_can_cuw <- reshape2::dcast(data=summary_by_can_cuw,
+                                        v024~c_d_can_cuw,value.var="count_uw")
+
+summary_by_can_cuw <- reshape2::dcast(data=summary_by_can_cuw ,
+                                            v024~c_d_can_cuw,value.var="freq")
+
+summary_by_can_cuw[is.na(summary_by_can_cuw)] <- 0
+count_by_can_cuw[is.na(count_by_can_cuw)] <- 0
+
+```
+
+Calculating expected number of cases and estimating Goodness-of-fit
+```{r}
+
+count_by_can_cuw$expected_dual <- with(count_by_can_cuw,
+                                       ((child_underweight + dual)*(child_anemia+dual))/
+                                         (child_underweight+dual+child_anemia+neither))
+
+count_by_can_cuw$difference_observed_expected <- with(count_by_can_cuw,
+                                                      dual-expected_dual)
+
+# count_by_can_cuw = chisq_df(count_by_can_cuw)
+count_uw_by_can_cuw = chisq_df(count_uw_by_can_cuw)
+
+```
+
+```{r}
+merge_vars <- c("v024","expected_dual","difference_observed_expected")
+                # ,"chisq_statistic","chisq_p"
+summary_by_can_cuw<- merge(summary_by_can_cuw,count_by_can_cuw[,merge_vars],by="v024")
+```
+###4.2 Individual level
+####1. MAn + MOw
+
+```{r}
+individual[,d_anemia_overweight := ifelse(!is.na(m_d_bmi_category),
+                                  ifelse(m_d_bmi_category=="overweight",
+                                         ifelse(m_d_anemia=="yes","dual","women_overweight"),
+                                         ifelse(m_d_anemia=="yes","women_anemia","neither")),NA)]
+table(individual$d_anemia_overweight,useNA="always")
+```
+
+```{r}
+summary_by_man_mow <- individual %>% 
+  group_by(v024,d_anemia_overweight) %>%
+  summarise(count = sum(d_survey_weight), 
+            count_uw = n()) %>%
+  mutate(freq = count/sum(count)) 
+
+count_by_man_mow <- reshape2::dcast(data=summary_by_man_mow ,
+                                            v024 ~d_anemia_overweight,value.var="count")
+count_uw_by_man_mow <- reshape2::dcast(data=summary_by_man_mow,
+                                        v024 ~d_anemia_overweight,value.var="count_uw")
+
+
+summary_by_man_mow <- reshape2::dcast(data=summary_by_man_mow ,
+                                            v024 ~d_anemia_overweight,value.var="freq")
+
+summary_by_man_mow[is.na(summary_by_man_mow)] <- 0
+count_by_man_mow[is.na(count_by_man_mow)] <- 0
+
+
+```
+
+```{r}
+
+count_by_man_mow$expected_dual <- with(count_by_man_mow,
+                                       ((women_anemia + dual)*(women_overweight+dual))/
+                                         (women_anemia+dual+women_overweight+neither))
+
+count_by_man_mow$difference_observed_expected <- with(count_by_man_mow,
+                                                      dual-expected_dual)
+
+# count_by_man_mow = chisq_df(count_by_man_mow,district=FALSE)
+count_uw_by_man_mow = chisq_df(count_uw_by_man_mow,district=FALSE)
+
+```
+
+```{r}
+merge_vars <- c("v024","expected_dual","difference_observed_expected")
+                # ,"chisq_statistic","chisq_p")
+summary_by_man_mow <- merge(summary_by_man_mow,count_by_man_mow[,merge_vars],by="v024")
+```
+
+
+####2. MAn + MUw
+
+```{r}
+individual[,d_anemia_underweight := ifelse(!is.na(m_d_bmi_category),
+                                  ifelse(m_d_bmi_category=="underweight",
+                                         ifelse(m_d_anemia=="yes","dual","women_underweight"),
+                                         ifelse(m_d_anemia=="yes","women_anemia","neither")),NA)]
+table(individual$d_anemia_underweight,useNA="always")
+```
+
+```{r}
+summary_by_man_muw <- individual %>% 
+  group_by(v024,d_anemia_underweight) %>%
+  summarise(count = sum(d_survey_weight), 
+            count_uw = n()) %>%
+  mutate(freq = count/sum(count)) 
+
+count_by_man_muw <- reshape2::dcast(data=summary_by_man_muw ,
+                                            v024 ~d_anemia_underweight,value.var="count")
+count_uw_by_man_muw <- reshape2::dcast(data=summary_by_man_muw,
+                                        v024 ~d_anemia_underweight,value.var="count_uw")
+
+
+summary_by_man_muw <- reshape2::dcast(data=summary_by_man_muw ,
+                                            v024 ~d_anemia_underweight,value.var="freq")
+
+summary_by_man_muw[is.na(summary_by_man_muw)] <- 0
+count_by_man_muw[is.na(count_by_man_muw)] <- 0
+
+
+```
+
+```{r}
+
+count_by_man_muw$expected_dual <- with(count_by_man_muw,
+                                       ((women_anemia + dual)*(women_underweight+dual))/
+                                         (women_anemia+dual+women_underweight+neither))
+
+count_by_man_muw$difference_observed_expected <- with(count_by_man_muw,
+                                                      dual-expected_dual)
+
+# count_by_man_muw = chisq_df(count_by_man_muw,district=FALSE)
+count_uw_by_man_muw = chisq_df(count_uw_by_man_muw,district=FALSE)
+
+```
+
+```{r}
+merge_vars <- c("v024","expected_dual","difference_observed_expected")
+                # ,"chisq_statistic","chisq_p")
+summary_by_man_muw <- merge(summary_by_man_muw,count_by_man_muw[,merge_vars],by="v024")
+```
+
+###4.3 Mother child pairs
+
+
+####1. CUw + MOw
+
+Condition:
+- Mother underweight counted under "child_underweight" OR "neither"
+- Child overweight counted under "mother_overweight" OR "neither"
+```{r}
+child_df[,d_cuw_mow := ifelse(!is.na(m_d_bmi_category) & !is.na(c_d_underweight),
+                                  ifelse(m_d_bmi_category=="overweight",
+                                         ifelse(c_d_underweight==1,"dual","mother_overweight"),
+                                         ifelse(c_d_underweight==1,
+                                                "child_underweight","neither")),NA)]
+table(child_df$d_cuw_mow,useNA="always")
+```
+
+```{r}
+summary_by_cuw_mow <- child_df %>% 
+  group_by(v024, d_cuw_mow) %>%
+  summarise(count = sum(d_survey_weight), 
+            count_uw = n()) %>%
+  mutate(freq = count/sum(count)) 
+
+count_by_cuw_mow <- reshape2::dcast(data=summary_by_cuw_mow ,
+                                            v024~d_cuw_mow,value.var="count")
+
+count_uw_by_cuw_mow <- reshape2::dcast(data=summary_by_cuw_mow,
+                                        v024~d_cuw_mow,value.var="count_uw")
+
+summary_by_cuw_mow <- reshape2::dcast(data=summary_by_cuw_mow ,
+                                            v024~d_cuw_mow,value.var="freq")
+
+summary_by_cuw_mow[is.na(summary_by_cuw_mow)] <- 0
+count_by_cuw_mow[is.na(count_by_cuw_mow)] <- 0
+
+```
+
+Calculating expected number of cases and estimating Goodness-of-fit
+```{r}
+
+count_by_cuw_mow$expected_dual <- with(count_by_cuw_mow,
+                                       ((child_underweight + dual)*(mother_overweight+dual))/
+                                         (child_underweight+dual+mother_overweight+neither))
+
+count_by_cuw_mow$difference_observed_expected <- with(count_by_cuw_mow,
+                                                      dual-expected_dual)
+
+# count_by_cuw_mow = chisq_df(count_by_cuw_mow)
+count_uw_by_cuw_mow = chisq_df(count_uw_by_cuw_mow)
+
+```
+
+```{r}
+merge_vars <- c("v024","expected_dual","difference_observed_expected")
+                # ,"chisq_statistic","chisq_p"
+summary_by_cuw_mow <- merge(summary_by_cuw_mow,count_by_cuw_mow[,merge_vars],by="v024")
+```
+
+
+####2. CSt + MOw
+
+Condition:
+- Mother underweight counted under "child_underweight" OR "neither"
+```{r}
+child_df[,d_cst_mow := ifelse(!is.na(m_d_bmi_category) & !is.na(c_d_stunted),
+                                  ifelse(m_d_bmi_category=="overweight",
+                                         ifelse(c_d_stunted==1,"dual","mother_overweight"),
+                                         ifelse(c_d_stunted==1,
+                                                "child_stunted","neither")),NA)]
+table(child_df$d_cst_mow,useNA="always")
+```
+
+```{r}
+summary_by_cst_mow <- child_df %>% 
+  group_by(v024, d_cst_mow) %>%
+  summarise(count = sum(d_survey_weight), 
+            count_uw = n()) %>%
+  mutate(freq = count/sum(count)) 
+
+count_by_cst_mow <- reshape2::dcast(data=summary_by_cst_mow ,
+                                            v024~d_cst_mow,value.var="count")
+
+count_uw_by_cst_mow  <- reshape2::dcast(data=summary_by_cst_mow ,
+                                        v024~d_cst_mow,value.var="count_uw")
+
+summary_by_cst_mow <- reshape2::dcast(data=summary_by_cst_mow ,
+                                            v024~d_cst_mow,value.var="freq")
+
+summary_by_cst_mow[is.na(summary_by_cst_mow)] <- 0
+count_by_cst_mow[is.na(count_by_cst_mow)] <- 0
+
+```
+
+Calculating expected number of cases and estimating Goodness-of-fit
+```{r}
+
+count_by_cst_mow$expected_dual <- with(count_by_cst_mow,
+                                       ((child_stunted + dual)*(mother_overweight+dual))/
+                                         (child_stunted+dual+mother_overweight+neither))
+
+count_by_cst_mow$difference_observed_expected <- with(count_by_cst_mow,
+                                                      dual-expected_dual)
+
+# count_by_cst_mow = chisq_df(count_by_cst_mow)
+count_uw_by_cst_mow = chisq_df(count_uw_by_cst_mow)
+
+```
+
+```{r}
+merge_vars <- c("v024","expected_dual","difference_observed_expected")
+                # ,"chisq_statistic","chisq_p"
+summary_by_cst_mow <- merge(summary_by_cst_mow,count_by_cst_mow[,merge_vars],by="v024")
+```
+
+
+####3. CAn + MOw
+
+Condition:
+- Only for children 6-59 months
+- Mother underweight counted under "child_underweight" OR "neither"
+- Child overweight counted under "mother_overweight" OR "neither"
+```{r}
+child_df[,d_can_mow := ifelse(!is.na(m_d_bmi_category) & !is.na(c_d_anemia) &
+                                !is.na(hw1) & hw1>=6,
+                                  ifelse(m_d_bmi_category=="overweight",
+                                         ifelse(c_d_anemia==1,"dual","mother_overweight"),
+                                         ifelse(c_d_anemia==1,
+                                                "child_anemia","neither")),NA)]
+table(child_df$d_can_mow,useNA="always")
+```
+
+```{r}
+summary_by_can_mow <- child_df %>% 
+  group_by(v024, d_can_mow) %>%
+  summarise(count = sum(d_survey_weight), 
+            count_uw = n()) %>%
+  mutate(freq = count/sum(count)) 
+
+count_by_can_mow <- reshape2::dcast(data=summary_by_can_mow ,
+                                            v024~d_can_mow,value.var="count")
+count_uw_by_can_mow  <- reshape2::dcast(data=summary_by_can_mow ,
+                                        v024~d_can_mow,value.var="count_uw")
+
+summary_by_can_mow <- reshape2::dcast(data=summary_by_can_mow ,
+                                            v024~d_can_mow,value.var="freq")
+
+summary_by_can_mow[is.na(summary_by_can_mow)] <- 0
+count_by_can_mow[is.na(count_by_can_mow)] <- 0
+
+```
+
+Calculating expected number of cases and estimating Goodness-of-fit
+```{r}
+
+count_by_can_mow$expected_dual <- with(count_by_can_mow,
+                                       ((child_anemia + dual)*(mother_overweight+dual))/
+                                         (child_anemia+dual+mother_overweight+neither))
+
+count_by_can_mow$difference_observed_expected <- with(count_by_can_mow,
+                                                      dual-expected_dual)
+
+# count_by_can_mow = chisq_df(count_by_can_mow)
+count_uw_by_can_mow = chisq_df(count_uw_by_can_mow)
+
+```
+
+```{r}
+merge_vars <- c("v024","expected_dual","difference_observed_expected")
+                # ,"chisq_statistic","chisq_p"
+summary_by_can_mow <- merge(summary_by_can_mow,count_by_can_mow[,merge_vars],by="v024")
+```
+
+
+
+####4. COw + MUw
+
+Condition:
+- Mother overweight counted under "child_overweight" OR "neither"
+- Child underweight counted under "mother_underweight" OR "neither"
+
+```{r}
+child_df[,d_cow_muw := ifelse(!is.na(m_d_bmi_category) & !is.na(c_d_overweight),
+                                  ifelse(m_d_bmi_category=="underweight",
+                                         ifelse(c_d_overweight==1,"dual","mother_underweight"),
+                                         ifelse(c_d_overweight==1,
+                                                "child_overweight","neither")),NA)]
+table(child_df$d_cow_muw,useNA="always")
+```
+
+```{r}
+summary_by_cow_muw <- child_df %>% 
+  group_by(v024, d_cow_muw) %>%
+  summarise(count = sum(d_survey_weight), 
+            count_uw = n()) %>%
+  mutate(freq = count/sum(count)) 
+
+count_by_cow_muw <- reshape2::dcast(data=summary_by_cow_muw ,
+                                            v024~d_cow_muw,value.var="count")
+
+count_uw_by_cow_muw  <- reshape2::dcast(data=summary_by_cow_muw,
+                                        v024~d_cow_muw,value.var="count_uw")
+
+summary_by_cow_muw <- reshape2::dcast(data=summary_by_cow_muw ,
+                                            v024~d_cow_muw,value.var="freq")
+
+summary_by_cow_muw[is.na(summary_by_cow_muw)] <- 0
+count_by_cow_muw[is.na(count_by_cow_muw)] <- 0
+
+```
+
+Calculating expected number of cases and estimating Goodness-of-fit
+```{r}
+
+count_by_cow_muw$expected_dual <- with(count_by_cow_muw,
+                                       ((child_overweight + dual)*(mother_underweight+dual))/
+                                         (child_overweight+dual+mother_underweight+neither))
+
+count_by_cow_muw$difference_observed_expected <- with(count_by_cow_muw,
+                                                      dual-expected_dual)
+
+# count_by_cow_muw = chisq_df(count_by_cow_muw)
+count_uw_by_cow_muw = chisq_df(count_uw_by_cow_muw)
+
+```
+
+```{r}
+merge_vars <- c("v024","expected_dual","difference_observed_expected")
+                # ,"chisq_statistic","chisq_p"
+summary_by_cow_muw <- merge(summary_by_cow_muw,count_by_cow_muw[,merge_vars],by="v024")
+```
+
+
+
+####5. COw + MAn
+
+```{r}
+child_df[,d_cow_man := ifelse(!is.na(m_d_anemia) & !is.na(c_d_overweight),
+                                  ifelse(m_d_anemia=="yes",
+                                         ifelse(c_d_overweight==1,"dual","mother_anemia"),
+                                         ifelse(c_d_overweight==1,
+                                                "child_overweight","neither")),NA)]
+table(child_df$d_cow_man,useNA="always")
+```
+
+```{r}
+summary_by_cow_man <- child_df %>% 
+  group_by(v024, d_cow_man) %>%
+  summarise(count = sum(d_survey_weight), 
+            count_uw = n()) %>%
+  mutate(freq = count/sum(count)) 
+
+count_by_cow_man <- reshape2::dcast(data=summary_by_cow_man ,
+                                            v024~d_cow_man,value.var="count")
+
+count_uw_by_cow_man  <- reshape2::dcast(data=summary_by_cow_man,
+                                        v024~d_cow_man,value.var="count_uw")
+
+summary_by_cow_man <- reshape2::dcast(data=summary_by_cow_man ,
+                                            v024~d_cow_man,value.var="freq")
+
+summary_by_cow_man[is.na(summary_by_cow_man)] <- 0
+count_by_cow_man[is.na(count_by_cow_man)] <- 0
+
+```
+
+Calculating expected number of cases and estimating Goodness-of-fit
+```{r}
+
+count_by_cow_man$expected_dual <- with(count_by_cow_man,
+                                       ((child_overweight + dual)*(mother_anemia+dual))/
+                                         (child_overweight+dual+mother_anemia+neither))
+
+count_by_cow_man$difference_observed_expected <- with(count_by_cow_man,
+                                                      dual-expected_dual)
+
+# count_by_cow_man = chisq_df(count_by_cow_man)
+count_uw_by_cow_man = chisq_df(count_uw_by_cow_man)
+
+```
+
+```{r}
+merge_vars <- c("v024","expected_dual","difference_observed_expected")
+                # ,"chisq_statistic","chisq_p"
+summary_by_cow_man <- merge(summary_by_cow_man,count_by_cow_man[,merge_vars],by="v024")
+```
+
+
+
+####6. COw + MOw
+```{r}
+child_df[,d_cow_mow := ifelse(!is.na(m_d_bmi_category) & !is.na(c_d_overweight),
+                                  ifelse(m_d_bmi_category=="overweight",
+                                         ifelse(c_d_overweight==1,"dual","mother_overweight"),
+                                         ifelse(c_d_overweight==1,
+                                                "child_overweight","neither")),NA)]
+table(child_df$d_cow_mow,useNA="always")
+```
+
+```{r}
+summary_by_cow_mow <- child_df %>% 
+  group_by(v024, d_cow_mow) %>%
+  summarise(count = sum(d_survey_weight), 
+            count_uw = n()) %>%
+  mutate(freq = count/sum(count)) 
+
+count_by_cow_mow <- reshape2::dcast(data=summary_by_cow_mow ,
+                                            v024~d_cow_mow,value.var="count")
+
+count_uw_by_cow_mow  <- reshape2::dcast(data=summary_by_cow_mow,
+                                        v024~d_cow_mow,value.var="count_uw")
+
+summary_by_cow_mow <- reshape2::dcast(data=summary_by_cow_mow ,
+                                            v024~d_cow_mow,value.var="freq")
+
+summary_by_cow_mow[is.na(summary_by_cow_mow)] <- 0
+count_by_cow_mow[is.na(count_by_cow_mow)] <- 0
+
+```
+
+Calculating expected number of cases and estimating Goodness-of-fit
+```{r}
+
+count_by_cow_mow$expected_dual <- with(count_by_cow_mow,
+                                       ((child_overweight + dual)*(mother_overweight+dual))/
+                                         (child_overweight+dual+mother_overweight+neither))
+
+count_by_cow_mow$difference_observed_expected <- with(count_by_cow_mow,
+                                                      dual-expected_dual)
+
+# count_by_cow_mow = chisq_df(count_by_cow_mow)
+count_uw_by_cow_mow = chisq_df(count_uw_by_cow_mow)
+
+```
+
+```{r}
+merge_vars <- c("v024","expected_dual","difference_observed_expected")
+                # ,"chisq_statistic","chisq_p"
+summary_by_cow_mow <- merge(summary_by_cow_mow,count_by_cow_mow[,merge_vars],by="v024")
+```
+
+
+####7. CUw + MUw
+```{r}
+child_df[,d_cuw_muw := ifelse(!is.na(m_d_bmi_category) & !is.na(c_d_underweight),
+                                  ifelse(m_d_bmi_category=="underweight",
+                                         ifelse(c_d_underweight==1,"dual","mother_underweight"),
+                                         ifelse(c_d_underweight==1,
+                                                "child_underweight","neither")),NA)]
+table(child_df$d_cuw_muw,useNA="always")
+```
+
+```{r}
+summary_by_cuw_muw <- child_df %>% 
+  group_by(v024, d_cuw_muw) %>%
+  summarise(count = sum(d_survey_weight), 
+            count_uw = n()) %>%
+  mutate(freq = count/sum(count)) 
+
+count_by_cuw_muw <- reshape2::dcast(data=summary_by_cuw_muw ,
+                                            v024~d_cuw_muw,value.var="count")
+
+count_uw_by_cuw_muw  <- reshape2::dcast(data=summary_by_cuw_muw,
+                                        v024~d_cuw_muw,value.var="count_uw")
+
+summary_by_cuw_muw <- reshape2::dcast(data=summary_by_cuw_muw ,
+                                            v024~d_cuw_muw,value.var="freq")
+
+summary_by_cuw_muw[is.na(summary_by_cuw_muw)] <- 0
+count_by_cuw_muw[is.na(count_by_cuw_muw)] <- 0
+
+```
+
+Calculating expected number of cases and estimating Goodness-of-fit
+```{r}
+
+count_by_cuw_muw$expected_dual <- with(count_by_cuw_muw,
+                                       ((child_underweight + dual)*(mother_underweight+dual))/
+                                         (child_underweight+dual+mother_underweight+neither))
+
+count_by_cuw_muw$difference_observed_expected <- with(count_by_cuw_muw,
+                                                      dual-expected_dual)
+
+# count_by_cuw_muw = chisq_df(count_by_cuw_muw)
+count_uw_by_cuw_muw = chisq_df(count_uw_by_cuw_muw)
+
+```
+
+```{r}
+merge_vars <- c("v024","expected_dual","difference_observed_expected")
+                # ,"chisq_statistic","chisq_p"
+summary_by_cuw_muw <- merge(summary_by_cuw_muw,count_by_cuw_muw[,merge_vars],by="v024")
+```
+
+
+####8. CAn + MAn
+```{r}
+child_df[,d_can_man := ifelse(!is.na(m_d_anemia) & !is.na(c_d_anemia) &
+                                !is.na(hw1) & hw1>=6,
+                                  ifelse(m_d_anemia=="yes",
+                                         ifelse(c_d_anemia==1,"dual","mother_anemia"),
+                                         ifelse(c_d_anemia==1,
+                                                "child_anemia","neither")),NA)]
+table(child_df$d_can_man,useNA="always")
+```
+
+```{r}
+summary_by_can_man <- child_df %>% 
+  group_by(v024, d_can_man) %>%
+  summarise(count = sum(d_survey_weight), 
+            count_uw = n()) %>%
+  mutate(freq = count/sum(count)) 
+
+count_by_can_man <- reshape2::dcast(data=summary_by_can_man ,
+                                            v024~d_can_man,value.var="count")
+count_uw_by_can_man  <- reshape2::dcast(data=summary_by_can_man ,
+                                        v024~d_can_man,value.var="count_uw")
+
+summary_by_can_man <- reshape2::dcast(data=summary_by_can_man ,
+                                            v024~d_can_man,value.var="freq")
+
+summary_by_can_man[is.na(summary_by_can_man)] <- 0
+count_by_can_man[is.na(count_by_can_man)] <- 0
+
+```
+
+Calculating expected number of cases and estimating Goodness-of-fit
+```{r}
+
+count_by_can_man$expected_dual <- with(count_by_can_man,
+                                       ((child_anemia + dual)*(mother_anemia+dual))/
+                                         (child_anemia+dual+mother_anemia+neither))
+
+count_by_can_man$difference_observed_expected <- with(count_by_can_man,
+                                                      dual-expected_dual)
+
+# count_by_can_man = chisq_df(count_by_can_man)
+count_uw_by_can_man = chisq_df(count_uw_by_can_man)
+
+```
+
+```{r}
+merge_vars <- c("v024","expected_dual","difference_observed_expected")
+                # ,"chisq_statistic","chisq_p"
+summary_by_can_man <- merge(summary_by_can_man,count_by_can_man[,merge_vars],by="v024")
+```
+
+####9. CUw + MAn
+```{r}
+child_df[,d_cuw_man := ifelse(!is.na(m_d_anemia) & !is.na(c_d_underweight),
+                                  ifelse(m_d_anemia=="yes",
+                                         ifelse(c_d_underweight==1,"dual","mother_anemia"),
+                                         ifelse(c_d_underweight==1,
+                                                "child_underweight","neither")),NA)]
+table(child_df$d_cuw_man,useNA="always")
+```
+
+```{r}
+summary_by_cuw_man <- child_df %>% 
+  group_by(v024, d_cuw_man) %>%
+  summarise(count = sum(d_survey_weight), 
+            count_uw = n()) %>%
+  mutate(freq = count/sum(count)) 
+
+count_by_cuw_man <- reshape2::dcast(data=summary_by_cuw_man ,
+                                            v024~d_cuw_man,value.var="count")
+
+count_uw_by_cuw_man  <- reshape2::dcast(data=summary_by_cuw_man,
+                                        v024~d_cuw_man,value.var="count_uw")
+
+summary_by_cuw_man <- reshape2::dcast(data=summary_by_cuw_man ,
+                                            v024~d_cuw_man,value.var="freq")
+
+summary_by_cuw_man[is.na(summary_by_cuw_man)] <- 0
+count_by_cuw_man[is.na(count_by_cuw_man)] <- 0
+
+```
+
+Calculating expected number of cases and estimating Goodness-of-fit
+```{r}
+
+count_by_cuw_man$expected_dual <- with(count_by_cuw_man,
+                                       ((child_underweight + dual)*(mother_anemia+dual))/
+                                         (child_underweight+dual+mother_anemia+neither))
+
+count_by_cuw_man$difference_observed_expected <- with(count_by_cuw_man,
+                                                      dual-expected_dual)
+
+# count_by_cuw_man = chisq_df(count_by_cuw_man)
+count_uw_by_cuw_man = chisq_df(count_uw_by_cuw_man)
+
+```
+
+```{r}
+merge_vars <- c("v024","expected_dual","difference_observed_expected")
+                # ,"chisq_statistic","chisq_p"
+summary_by_cuw_man <- merge(summary_by_cuw_man,count_by_cuw_man[,merge_vars],by="v024")
+```
+
+####10. CSt + MUw
+
+Condition:
+- Mother overweight counted under "child_underweight" OR "neither"
+```{r}
+child_df[,d_cst_muw := ifelse(!is.na(m_d_bmi_category) & !is.na(c_d_stunted),
+                                  ifelse(m_d_bmi_category=="underweight",
+                                         ifelse(c_d_stunted==1,"dual","mother_underweight"),
+                                         ifelse(c_d_stunted==1,
+                                                "child_stunted","neither")),NA)]
+table(child_df$d_cst_muw,useNA="always")
+```
+
+```{r}
+summary_by_cst_muw <- child_df %>% 
+  group_by(v024, d_cst_muw) %>%
+  summarise(count = sum(d_survey_weight), 
+            count_uw = n()) %>%
+  mutate(freq = count/sum(count)) 
+
+count_by_cst_muw <- reshape2::dcast(data=summary_by_cst_muw ,
+                                            v024~d_cst_muw,value.var="count")
+
+count_uw_by_cst_muw  <- reshape2::dcast(data=summary_by_cst_muw ,
+                                        v024~d_cst_muw,value.var="count_uw")
+
+summary_by_cst_muw <- reshape2::dcast(data=summary_by_cst_muw ,
+                                            v024~d_cst_muw,value.var="freq")
+
+summary_by_cst_muw[is.na(summary_by_cst_muw)] <- 0
+count_by_cst_muw[is.na(count_by_cst_muw)] <- 0
+
+```
+
+Calculating expected number of cases and estimating Goodness-of-fit
+```{r}
+
+count_by_cst_muw$expected_dual <- with(count_by_cst_muw,
+                                       ((child_stunted + dual)*(mother_underweight+dual))/
+                                         (child_stunted+dual+mother_underweight+neither))
+
+count_by_cst_muw$difference_observed_expected <- with(count_by_cst_muw,
+                                                      dual-expected_dual)
+
+# count_by_cst_muw = chisq_df(count_by_cst_muw)
+count_uw_by_cst_muw = chisq_df(count_uw_by_cst_muw)
+
+```
+
+```{r}
+merge_vars <- c("v024","expected_dual","difference_observed_expected")
+                # ,"chisq_statistic","chisq_p"
+summary_by_cst_muw <- merge(summary_by_cst_muw,count_by_cst_muw[,merge_vars],by="v024")
+```
+
+
+####11. CSt + MAn
+
+Condition:
+- Mother overweight counted under "child_underweight" OR "neither"
+```{r}
+child_df[,d_cst_man := ifelse(!is.na(m_d_anemia) & !is.na(c_d_stunted),
+                                  ifelse(m_d_anemia=="yes",
+                                         ifelse(c_d_stunted==1,"dual","mother_anemia"),
+                                         ifelse(c_d_stunted==1,
+                                                "child_stunted","neither")),NA)]
+table(child_df$d_cst_man,useNA="always")
+```
+
+```{r}
+summary_by_cst_man <- child_df %>% 
+  group_by(v024, d_cst_man) %>%
+  summarise(count = sum(d_survey_weight), 
+            count_uw = n()) %>%
+  mutate(freq = count/sum(count)) 
+
+count_by_cst_man <- reshape2::dcast(data=summary_by_cst_man ,
+                                            v024~d_cst_man,value.var="count")
+
+count_uw_by_cst_man  <- reshape2::dcast(data=summary_by_cst_man ,
+                                        v024~d_cst_man,value.var="count_uw")
+
+summary_by_cst_man <- reshape2::dcast(data=summary_by_cst_man ,
+                                            v024~d_cst_man,value.var="freq")
+
+summary_by_cst_man[is.na(summary_by_cst_man)] <- 0
+count_by_cst_man[is.na(count_by_cst_man)] <- 0
+
+```
+
+Calculating expected number of cases and estimating Goodness-of-fit
+```{r}
+
+count_by_cst_man$expected_dual <- with(count_by_cst_man,
+                                       ((child_stunted + dual)*(mother_anemia+dual))/
+                                         (child_stunted+dual+mother_anemia+neither))
+
+count_by_cst_man$difference_observed_expected <- with(count_by_cst_man,
+                                                      dual-expected_dual)
+
+# count_by_cst_man = chisq_df(count_by_cst_man)
+count_uw_by_cst_man = chisq_df(count_uw_by_cst_man)
+
+```
+
+```{r}
+merge_vars <- c("v024","expected_dual","difference_observed_expected")
+                # ,"chisq_statistic","chisq_p"
+summary_by_cst_man <- merge(summary_by_cst_man,count_by_cst_man[,merge_vars],by="v024")
+```
+
+####12. CAn + MUw
+```{r}
+child_df[,d_can_muw := ifelse(!is.na(m_d_bmi_category) & !is.na(c_d_anemia) &
+                                !is.na(hw1) & hw1>=6,
+                                  ifelse(m_d_bmi_category=="underweight",
+                                         ifelse(c_d_anemia==1,"dual","mother_underweight"),
+                                         ifelse(c_d_anemia==1,
+                                                "child_anemia","neither")),NA)]
+table(child_df$d_can_muw,useNA="always")
+```
+
+```{r}
+summary_by_can_muw <- child_df %>% 
+  group_by(v024, d_can_muw) %>%
+  summarise(count = sum(d_survey_weight), 
+            count_uw = n()) %>%
+  mutate(freq = count/sum(count)) 
+
+count_by_can_muw <- reshape2::dcast(data=summary_by_can_muw ,
+                                            v024~d_can_muw,value.var="count")
+count_uw_by_can_muw  <- reshape2::dcast(data=summary_by_can_muw ,
+                                        v024~d_can_muw,value.var="count_uw")
+
+summary_by_can_muw <- reshape2::dcast(data=summary_by_can_muw ,
+                                            v024~d_can_muw,value.var="freq")
+
+summary_by_can_muw[is.na(summary_by_can_muw)] <- 0
+count_by_can_muw[is.na(count_by_can_muw)] <- 0
+
+```
+
+Calculating expected number of cases and estimating Goodness-of-fit
+```{r}
+
+count_by_can_muw$expected_dual <- with(count_by_can_muw,
+                                       ((child_anemia + dual)*(mother_underweight+dual))/
+                                         (child_anemia+dual+mother_underweight+neither))
+
+count_by_can_muw$difference_observed_expected <- with(count_by_can_muw,
+                                                      dual-expected_dual)
+
+# count_by_can_muw = chisq_df(count_by_can_muw)
+count_uw_by_can_muw = chisq_df(count_uw_by_can_muw)
+
+```
+
+```{r}
+merge_vars <- c("v024","expected_dual","difference_observed_expected")
+                # ,"chisq_statistic","chisq_p"
+summary_by_can_muw <- merge(summary_by_can_muw,count_by_can_muw[,merge_vars],by="v024")
+```
+
+
+###6. Formatting into appropriate structure
+
+
+
+
+```{r}
+format_by_can_cow <- format_structure(count_by_can_cow,
+                                      summary_by_can_cow,
+                                      count_uw_by_can_cow,
+                                      district=FALSE)
+
+
+format_by_cst_cow <- format_structure(count_by_cst_cow,
+                                      summary_by_cst_cow,
+                                      count_uw_by_cst_cow,
+                                      district=FALSE)
+
+format_by_cst_cuw <- format_structure(count_by_cst_cuw,
+                                      summary_by_cst_cuw,
+                                      count_uw_by_cst_cuw,
+                                      district=FALSE)
+
+format_by_cst_can <- format_structure(count_by_cst_can,
+                                      summary_by_cst_can,
+                                      count_uw_by_cst_can,
+                                      district=FALSE)
+
+format_by_can_cuw <- format_structure(count_by_can_cuw,
+                                      summary_by_can_cuw,
+                                      count_uw_by_can_cuw,
+                                      district=FALSE)
+
+
+
+format_by_man_mow <- format_structure(count_by_man_mow,
+                                      summary_by_man_mow,
+                                      count_uw_by_man_mow,
+                                      district=FALSE)
+
+format_by_man_muw <- format_structure(count_by_man_muw,
+                                      summary_by_man_muw,
+                                      count_uw_by_man_muw,
+                                      district=FALSE)
+
+
+
+format_by_cuw_mow <- format_structure(count_by_cuw_mow,
+                                      summary_by_cuw_mow,
+                                      count_uw_by_cuw_mow,
+                                      district=FALSE)
+
+
+format_by_cst_mow <- format_structure(count_by_cst_mow,
+                                      summary_by_cst_mow,
+                                      count_uw_by_cst_mow,
+                                      district=FALSE)
+
+format_by_can_mow <- format_structure(count_by_can_mow,
+                                      summary_by_can_mow,
+                                      count_uw_by_can_mow,
+                                      district=FALSE)
+
+
+format_by_cow_muw <- format_structure(count_by_cow_muw,
+                                      summary_by_cow_muw,
+                                      count_uw_by_cow_muw,
+                                      district=FALSE)
+
+
+format_by_cow_man <- format_structure(count_by_cow_man,
+                                      summary_by_cow_man,
+                                      count_uw_by_cow_man,
+                                      district=FALSE)
+
+format_by_cow_mow <- format_structure(count_by_cow_mow,
+                                      summary_by_cow_mow,
+                                      count_uw_by_cow_mow,
+                                      district=FALSE)
+
+format_by_cuw_muw <- format_structure(count_by_cuw_muw,
+                                      summary_by_cuw_muw,
+                                      count_uw_by_cuw_muw,
+                                      district=FALSE)
+
+format_by_can_man <- format_structure(count_by_can_man,
+                                      summary_by_can_man,
+                                      count_uw_by_can_man,
+                                      district=FALSE)
+
+format_by_cuw_man <- format_structure(count_by_cuw_man,
+                                      summary_by_cuw_man,
+                                      count_uw_by_cuw_man,
+                                      district=FALSE)
+
+format_by_cst_muw <- format_structure(count_by_cst_muw,
+                                      summary_by_cst_muw,
+                                      count_uw_by_cst_muw,
+                                      district=FALSE)
+
+format_by_cst_man <- format_structure(count_by_cst_man,
+                                      summary_by_cst_man,
+                                      count_uw_by_cst_man,
+                                      district=FALSE)
+
+format_by_can_muw <- format_structure(count_by_can_muw,
+                                      summary_by_can_muw,
+                                      count_uw_by_can_muw,
+                                      district=FALSE)
+
+
+
+```
+
+
+###DISTRICT LEVEL
+###4.1 Child level
+
+####1. CAn + COw
+```{r}
+dist_summary_by_can_cow <- child_df %>% 
+  group_by(v024, sdistri,c_d_can_cow) %>%
+  summarise(count = sum(d_survey_weight), 
+            count_uw = n()) %>%
+  mutate(freq = count/sum(count)) 
+
+dist_count_by_can_cow <- reshape2::dcast(data=dist_summary_by_can_cow ,
+                                            v024 + sdistri~c_d_can_cow,value.var="count")
+
+dist_count_uw_by_can_cow <- reshape2::dcast(data=dist_summary_by_can_cow,
+                                        v024 + sdistri~c_d_can_cow,value.var="count_uw")
+
+dist_summary_by_can_cow <- reshape2::dcast(data=dist_summary_by_can_cow ,
+                                            v024+ sdistri~c_d_can_cow,value.var="freq")
+
+dist_summary_by_can_cow[is.na(dist_summary_by_can_cow)] <- 0
+dist_count_by_can_cow[is.na(dist_count_by_can_cow)] <- 0
+
+```
+
+Calculating expected number of cases and estimating Goodness-of-fit
+```{r}
+
+dist_count_by_can_cow$expected_dual <- with(dist_count_by_can_cow,
+                                       ((child_anemia + dual)*(child_overweight+dual))/
+                                         (child_anemia+dual+child_overweight+neither))
+
+dist_count_by_can_cow$difference_observed_expected <- with(dist_count_by_can_cow,
+                                                      dual-expected_dual)
+
+# dist_count_by_can_cow = chisq_df(dist_count_by_can_cow,district = TRUE)
+dist_count_uw_by_can_cow = chisq_df(dist_count_uw_by_can_cow,district = TRUE)
+
+```
+
+```{r}
+merge_vars <- c("sdistri","expected_dual","difference_observed_expected")
+                # ,"chisq_statistic","chisq_p"
+dist_summary_by_can_cow <- merge(dist_summary_by_can_cow,
+                                 dist_count_by_can_cow[,merge_vars],by="sdistri")
+```
+
+
+
+
+
+####2. CSt + COw
+```{r}
+dist_summary_by_cst_cow <- child_df %>% 
+  group_by(v024, sdistri, c_d_cst_cow) %>%
+  summarise(count = sum(d_survey_weight), 
+            count_uw = n()) %>%
+  mutate(freq = count/sum(count)) 
+
+dist_count_by_cst_cow <- reshape2::dcast(data=dist_summary_by_cst_cow ,
+                                            v024 +sdistri~c_d_cst_cow,value.var="count")
+
+
+dist_count_uw_by_cst_cow <- reshape2::dcast(data=dist_summary_by_cst_cow,
+                                        v024 +sdistri~c_d_cst_cow,value.var="count_uw")
+
+dist_summary_by_cst_cow <- reshape2::dcast(data=dist_summary_by_cst_cow ,
+                                            v024 +sdistri~c_d_cst_cow,value.var="freq")
+
+dist_summary_by_cst_cow[is.na(dist_summary_by_cst_cow)] <- 0
+dist_count_by_cst_cow[is.na(dist_count_by_cst_cow)] <- 0
+
+```
+
+Calculating expected number of cases and estimating Goodness-of-fit
+```{r}
+
+dist_count_by_cst_cow$expected_dual <- with(dist_count_by_cst_cow,
+                                       ((child_stunted + dual)*(child_overweight+dual))/
+                                         (child_stunted+dual+child_overweight+neither))
+
+dist_count_by_cst_cow$difference_observed_expected <- with(dist_count_by_cst_cow,
+                                                      dual-expected_dual)
+
+# dist_count_by_cst_cow = chisq_df(dist_count_by_cst_cow,district=TRUE)
+dist_count_uw_by_cst_cow = chisq_df(dist_count_uw_by_cst_cow,district=TRUE)
+
+```
+
+```{r}
+merge_vars <- c("sdistri","expected_dual","difference_observed_expected")
+                # ,"chisq_statistic","chisq_p"
+dist_summary_by_cst_cow<- merge(dist_summary_by_cst_cow,dist_count_by_cst_cow[,merge_vars],
+                                by="sdistri")
+```
+
+####3. CSt + CUw
+```{r}
+dist_summary_by_cst_cuw <- child_df %>% 
+  group_by(v024, sdistri, c_d_cst_cuw) %>%
+  summarise(count = sum(d_survey_weight), 
+            count_uw = n()) %>%
+  mutate(freq = count/sum(count)) 
+
+dist_count_by_cst_cuw <- reshape2::dcast(data=dist_summary_by_cst_cuw ,
+                                            v024 +sdistri~c_d_cst_cuw,value.var="count")
+
+
+dist_count_uw_by_cst_cuw <- reshape2::dcast(data=dist_summary_by_cst_cuw,
+                                        v024 +sdistri~c_d_cst_cuw,value.var="count_uw")
+
+dist_summary_by_cst_cuw <- reshape2::dcast(data=dist_summary_by_cst_cuw ,
+                                            v024 +sdistri~c_d_cst_cuw,value.var="freq")
+
+dist_summary_by_cst_cuw[is.na(dist_summary_by_cst_cuw)] <- 0
+dist_count_by_cst_cuw[is.na(dist_count_by_cst_cuw)] <- 0
+
+```
+
+Calculating expected number of cases and estimating Goodness-of-fit
+```{r}
+
+dist_count_by_cst_cuw$expected_dual <- with(dist_count_by_cst_cuw,
+                                       ((child_stunted + dual)*(child_underweight+dual))/
+                                         (child_stunted+dual+child_underweight+neither))
+
+dist_count_by_cst_cuw$difference_observed_expected <- with(dist_count_by_cst_cuw,
+                                                      dual-expected_dual)
+
+# dist_count_by_cst_cuw = chisq_df(dist_count_by_cst_cuw,district=TRUE)
+dist_count_uw_by_cst_cuw = chisq_df(dist_count_uw_by_cst_cuw,district=TRUE)
+
+```
+
+```{r}
+merge_vars <- c("sdistri","expected_dual","difference_observed_expected")
+                # ,"chisq_statistic","chisq_p"
+dist_summary_by_cst_cuw<- merge(dist_summary_by_cst_cuw,dist_count_by_cst_cuw[,merge_vars],
+                                by="sdistri")
+```
+
+####4. CSt + CAn
+```{r}
+dist_summary_by_cst_can <- child_df %>% 
+  group_by(v024, sdistri, c_d_cst_can) %>%
+  summarise(count = sum(d_survey_weight), 
+            count_uw = n()) %>%
+  mutate(freq = count/sum(count)) 
+
+dist_count_by_cst_can <- reshape2::dcast(data=dist_summary_by_cst_can ,
+                                            v024 +sdistri~c_d_cst_can,value.var="count")
+
+
+dist_count_uw_by_cst_can <- reshape2::dcast(data=dist_summary_by_cst_can,
+                                        v024 +sdistri~c_d_cst_can,value.var="count_uw")
+
+dist_summary_by_cst_can <- reshape2::dcast(data=dist_summary_by_cst_can ,
+                                            v024 +sdistri~c_d_cst_can,value.var="freq")
+
+dist_summary_by_cst_can[is.na(dist_summary_by_cst_can)] <- 0
+dist_count_by_cst_can[is.na(dist_count_by_cst_can)] <- 0
+
+```
+
+Calculating expected number of cases and estimating Goodness-of-fit
+```{r}
+
+dist_count_by_cst_can$expected_dual <- with(dist_count_by_cst_can,
+                                       ((child_stunted + dual)*(child_anemia+dual))/
+                                         (child_stunted+dual+child_anemia+neither))
+
+dist_count_by_cst_can$difference_observed_expected <- with(dist_count_by_cst_can,
+                                                      dual-expected_dual)
+
+# dist_count_by_cst_can = chisq_df(dist_count_by_cst_can,district=TRUE)
+dist_count_uw_by_cst_can = chisq_df(dist_count_uw_by_cst_can,district=TRUE)
+
+```
+
+```{r}
+merge_vars <- c("sdistri","expected_dual","difference_observed_expected")
+                # ,"chisq_statistic","chisq_p"
+dist_summary_by_cst_can<- merge(dist_summary_by_cst_can,dist_count_by_cst_can[,merge_vars],
+                                by="sdistri")
+```
+
+####5. CAn + CUw
+```{r}
+dist_summary_by_can_cuw <- child_df %>% 
+  group_by(v024, sdistri, c_d_can_cuw) %>%
+  summarise(count = sum(d_survey_weight), 
+            count_uw = n()) %>%
+  mutate(freq = count/sum(count)) 
+
+dist_count_by_can_cuw <- reshape2::dcast(data=dist_summary_by_can_cuw ,
+                                            v024 +sdistri~c_d_can_cuw,value.var="count")
+
+
+dist_count_uw_by_can_cuw <- reshape2::dcast(data=dist_summary_by_can_cuw,
+                                        v024 +sdistri~c_d_can_cuw,value.var="count_uw")
+
+dist_summary_by_can_cuw <- reshape2::dcast(data=dist_summary_by_can_cuw ,
+                                            v024 +sdistri~c_d_can_cuw,value.var="freq")
+
+dist_summary_by_can_cuw[is.na(dist_summary_by_can_cuw)] <- 0
+dist_count_by_can_cuw[is.na(dist_count_by_can_cuw)] <- 0
+
+```
+
+Calculating expected number of cases and estimating Goodness-of-fit
+```{r}
+
+dist_count_by_can_cuw$expected_dual <- with(dist_count_by_can_cuw,
+                                       ((child_anemia + dual)*(child_underweight+dual))/
+                                         (child_anemia+dual+child_underweight+neither))
+
+dist_count_by_can_cuw$difference_observed_expected <- with(dist_count_by_can_cuw,
+                                                      dual-expected_dual)
+
+# dist_count_by_can_cuw = chisq_df(dist_count_by_can_cuw,district=TRUE)
+dist_count_uw_by_can_cuw = chisq_df(dist_count_uw_by_can_cuw,district=TRUE)
+
+```
+
+```{r}
+merge_vars <- c("sdistri","expected_dual","difference_observed_expected")
+                # ,"chisq_statistic","chisq_p"
+dist_summary_by_can_cuw<- merge(dist_summary_by_can_cuw,dist_count_by_can_cuw[,merge_vars],
+                                by="sdistri")
+```
+
+###4.2 Individual level
+####1. MAn + MOw
+```{r}
+dist_summary_by_man_mow <- individual %>% 
+  group_by(v024,sdistri,d_anemia_overweight) %>%
+  summarise(count = sum(d_survey_weight), 
+            count_uw = n()) %>%
+  mutate(freq = count/sum(count)) 
+
+dist_count_by_man_mow <- reshape2::dcast(data=dist_summary_by_man_mow ,
+                                            v024 + sdistri~d_anemia_overweight,value.var="count")
+dist_count_uw_by_man_mow <- reshape2::dcast(data=dist_summary_by_man_mow,
+                                        v024 +sdistri~d_anemia_overweight,value.var="count_uw")
+
+
+dist_summary_by_man_mow <- reshape2::dcast(data=dist_summary_by_man_mow ,
+                                            v024 + sdistri~d_anemia_overweight,value.var="freq")
+
+dist_summary_by_man_mow[is.na(dist_summary_by_man_mow)] <- 0
+dist_count_by_man_mow[is.na(dist_count_by_man_mow)] <- 0
+
+```
+
+Calculating expected number of cases and estimating Goodness-of-fit
+```{r}
+
+dist_count_by_man_mow$expected_dual <- with(dist_count_by_man_mow,
+                                       ((women_anemia + dual)*(women_overweight+dual))/
+                                         (women_anemia+dual+women_overweight+neither))
+
+dist_count_by_man_mow$difference_observed_expected <- with(dist_count_by_man_mow,
+                                                      dual-expected_dual)
+
+# dist_count_by_man_mow = chisq_df(dist_count_by_man_mow, district = TRUE)
+dist_count_uw_by_man_mow = chisq_df(dist_count_uw_by_man_mow, district = TRUE)
+
+```
+
+```{r}
+merge_vars <- c("sdistri","expected_dual","difference_observed_expected")
+                # ,"chisq_statistic","chisq_p")
+dist_summary_by_man_mow <- merge(dist_summary_by_man_mow,dist_count_by_man_mow[,merge_vars],
+                                 by="sdistri")
+```
+
+
+####2. MAn + MUw
+```{r}
+dist_summary_by_man_muw <- individual %>% 
+  group_by(v024,sdistri,d_anemia_underweight) %>%
+  summarise(count = sum(d_survey_weight), 
+            count_uw = n()) %>%
+  mutate(freq = count/sum(count)) 
+
+dist_count_by_man_muw <- reshape2::dcast(data=dist_summary_by_man_muw ,
+                                            v024 + sdistri~d_anemia_underweight,value.var="count")
+dist_count_uw_by_man_muw <- reshape2::dcast(data=dist_summary_by_man_muw,
+                                        v024 +sdistri~d_anemia_underweight,value.var="count_uw")
+
+
+dist_summary_by_man_muw <- reshape2::dcast(data=dist_summary_by_man_muw ,
+                                            v024 + sdistri~d_anemia_underweight,value.var="freq")
+
+dist_summary_by_man_muw[is.na(dist_summary_by_man_muw)] <- 0
+dist_count_by_man_muw[is.na(dist_count_by_man_muw)] <- 0
+
+```
+
+Calculating expected number of cases and estimating Goodness-of-fit
+```{r}
+
+dist_count_by_man_muw$expected_dual <- with(dist_count_by_man_muw,
+                                       ((women_anemia + dual)*(women_underweight+dual))/
+                                         (women_anemia+dual+women_underweight+neither))
+
+dist_count_by_man_muw$difference_observed_expected <- with(dist_count_by_man_muw,
+                                                      dual-expected_dual)
+
+# dist_count_by_man_muw = chisq_df(dist_count_by_man_muw, district = TRUE)
+dist_count_uw_by_man_muw = chisq_df(dist_count_uw_by_man_muw, district = TRUE)
+
+```
+
+```{r}
+merge_vars <- c("sdistri","expected_dual","difference_observed_expected")
+                # ,"chisq_statistic","chisq_p")
+dist_summary_by_man_muw <- merge(dist_summary_by_man_muw,dist_count_by_man_muw[,merge_vars],
+                                 by="sdistri")
+```
+
+
+###4.3 Mother child pair
+####1. CUw + MOw
+```{r}
+dist_summary_by_cuw_mow <- child_df %>% 
+  group_by(v024,sdistri, d_cuw_mow) %>%
+  summarise(count = sum(d_survey_weight), 
+            count_uw = n()) %>%
+  mutate(freq = count/sum(count)) 
+
+dist_count_by_cuw_mow <- reshape2::dcast(data=dist_summary_by_cuw_mow ,
+                                            v024 +sdistri~d_cuw_mow,value.var="count")
+
+dist_count_uw_by_cuw_mow <- reshape2::dcast(data=dist_summary_by_cuw_mow,
+                                        v024 +sdistri~d_cuw_mow,value.var="count_uw")
+
+dist_summary_by_cuw_mow <- reshape2::dcast(data=dist_summary_by_cuw_mow ,
+                                            v024 +sdistri~d_cuw_mow,value.var="freq")
+
+dist_summary_by_cuw_mow[is.na(dist_summary_by_cuw_mow)] <- 0
+dist_count_by_cuw_mow[is.na(dist_count_by_cuw_mow)] <- 0
+
+```
+
+Calculating expected number of cases and estimating Goodness-of-fit
+```{r}
+
+dist_count_by_cuw_mow$expected_dual <- with(dist_count_by_cuw_mow,
+                                       ((child_underweight + dual)*(mother_overweight+dual))/
+                                         (child_underweight+dual+mother_overweight+neither))
+
+dist_count_by_cuw_mow$difference_observed_expected <- with(dist_count_by_cuw_mow,
+                                                      dual-expected_dual)
+
+# dist_count_by_cuw_mow = chisq_df(dist_count_by_cuw_mow,district=TRUE)
+dist_count_uw_by_cuw_mow = chisq_df(dist_count_uw_by_cuw_mow,district=TRUE)
+
+```
+
+```{r}
+merge_vars <- c("sdistri","expected_dual","difference_observed_expected")
+                # ,"chisq_statistic","chisq_p"
+dist_summary_by_cuw_mow <- merge(dist_summary_by_cuw_mow,
+                                 dist_count_by_cuw_mow[,merge_vars],by="sdistri")
+```
+
+
+
+####2. CSt + MOw
+```{r}
+dist_summary_by_cst_mow <- child_df %>% 
+  group_by(v024,sdistri, d_cst_mow) %>%
+  summarise(count = sum(d_survey_weight), 
+            count_uw = n()) %>%
+  mutate(freq = count/sum(count)) 
+
+dist_count_by_cst_mow <- reshape2::dcast(data=dist_summary_by_cst_mow ,
+                                            v024 +sdistri~d_cst_mow,value.var="count")
+
+dist_count_uw_by_cst_mow  <- reshape2::dcast(data=dist_summary_by_cst_mow ,
+                                        v024 +sdistri~d_cst_mow,value.var="count_uw")
+
+dist_summary_by_cst_mow <- reshape2::dcast(data=dist_summary_by_cst_mow ,
+                                            v024 +sdistri~d_cst_mow,value.var="freq")
+
+dist_summary_by_cst_mow[is.na(dist_summary_by_cst_mow)] <- 0
+dist_count_by_cst_mow[is.na(dist_count_by_cst_mow)] <- 0
+
+```
+
+Calculating expected number of cases and estimating Goodness-of-fit
+```{r}
+
+dist_count_by_cst_mow$expected_dual <- with(dist_count_by_cst_mow,
+                                       ((child_stunted + dual)*(mother_overweight+dual))/
+                                         (child_stunted+dual+mother_overweight+neither))
+
+dist_count_by_cst_mow$difference_observed_expected <- with(dist_count_by_cst_mow,
+                                                      dual-expected_dual)
+
+# dist_count_by_cst_mow = chisq_df(dist_count_by_cst_mow,district=TRUE)
+dist_count_uw_by_cst_mow = chisq_df(dist_count_uw_by_cst_mow,district=TRUE)
+
+```
+
+```{r}
+merge_vars <- c("sdistri","expected_dual","difference_observed_expected")
+                # ,"chisq_statistic","chisq_p"
+dist_summary_by_cst_mow <- merge(dist_summary_by_cst_mow,dist_count_by_cst_mow[,merge_vars],
+                                 by="sdistri")
+```
+
+
+
+####3. CAn + MOw
+```{r}
+dist_summary_by_can_mow <- child_df %>% 
+  group_by(v024,sdistri, d_can_mow) %>%
+  summarise(count = sum(d_survey_weight), 
+            count_uw = n()) %>%
+  mutate(freq = count/sum(count)) 
+
+dist_count_by_can_mow <- reshape2::dcast(data=dist_summary_by_can_mow ,
+                                            v024 + sdistri~d_can_mow,value.var="count")
+dist_count_uw_by_can_mow  <- reshape2::dcast(data=dist_summary_by_can_mow ,
+                                        v024 +sdistri~d_can_mow,value.var="count_uw")
+
+dist_summary_by_can_mow <- reshape2::dcast(data=dist_summary_by_can_mow ,
+                                            v024 +sdistri~d_can_mow,value.var="freq")
+
+dist_summary_by_can_mow[is.na(dist_summary_by_can_mow)] <- 0
+dist_count_by_can_mow[is.na(dist_count_by_can_mow)] <- 0
+
+```
+
+Calculating expected number of cases and estimating Goodness-of-fit
+```{r}
+
+dist_count_by_can_mow$expected_dual <- with(dist_count_by_can_mow,
+                                       ((child_anemia + dual)*(mother_overweight+dual))/
+                                         (child_anemia+dual+mother_overweight+neither))
+
+dist_count_by_can_mow$difference_observed_expected <- with(dist_count_by_can_mow,
+                                                      dual-expected_dual)
+
+# dist_count_by_can_mow = chisq_df(dist_count_by_can_mow,district=TRUE)
+dist_count_uw_by_can_mow = chisq_df(dist_count_uw_by_can_mow,district=TRUE)
+
+```
+
+```{r}
+merge_vars <- c("sdistri","expected_dual","difference_observed_expected")
+                # ,"chisq_statistic","chisq_p"
+dist_summary_by_can_mow <- merge(dist_summary_by_can_mow,dist_count_by_can_mow[,merge_vars],
+                                 by="sdistri")
+```
+
+
+
+####4. COw + MUw
+```{r}
+dist_summary_by_cow_muw <- child_df %>% 
+  group_by(v024,sdistri,d_cow_muw) %>%
+  summarise(count = sum(d_survey_weight), 
+            count_uw = n()) %>%
+  mutate(freq = count/sum(count)) 
+
+dist_count_by_cow_muw <- reshape2::dcast(data=dist_summary_by_cow_muw ,
+                                            v024 + sdistri~d_cow_muw,value.var="count")
+
+dist_count_uw_by_cow_muw  <- reshape2::dcast(data=dist_summary_by_cow_muw,
+                                        v024+ sdistri~d_cow_muw,value.var="count_uw")
+
+dist_summary_by_cow_muw <- reshape2::dcast(data=dist_summary_by_cow_muw ,
+                                            v024+ sdistri~d_cow_muw,value.var="freq")
+
+dist_summary_by_cow_muw[is.na(dist_summary_by_cow_muw)] <- 0
+dist_count_by_cow_muw[is.na(dist_count_by_cow_muw)] <- 0
+
+```
+
+Calculating expected number of cases and estimating Goodness-of-fit
+```{r}
+
+dist_count_by_cow_muw$expected_dual <- with(dist_count_by_cow_muw,
+                                       ((child_overweight + dual)*(mother_underweight+dual))/
+                                         (child_overweight+dual+mother_underweight+neither))
+
+dist_count_by_cow_muw$difference_observed_expected <- with(dist_count_by_cow_muw,
+                                                      dual-expected_dual)
+
+# dist_count_by_cow_muw = chisq_df(dist_count_by_cow_muw, district=TRUE)
+dist_count_uw_by_cow_muw = chisq_df(dist_count_uw_by_cow_muw, district=TRUE)
+
+```
+
+```{r}
+merge_vars <- c("sdistri","expected_dual","difference_observed_expected")
+                # ,"chisq_statistic","chisq_p"
+dist_summary_by_cow_muw <- merge(dist_summary_by_cow_muw,dist_count_by_cow_muw[,merge_vars],
+                                 by="sdistri")
+```
+
+
+
+####5. COw + MAn
+```{r}
+dist_summary_by_cow_man <- child_df %>% 
+  group_by(v024, sdistri, d_cow_man) %>%
+  summarise(count = sum(d_survey_weight), 
+            count_uw = n()) %>%
+  mutate(freq = count/sum(count)) 
+
+dist_count_by_cow_man <- reshape2::dcast(data=dist_summary_by_cow_man ,
+                                            v024 +sdistri~d_cow_man,value.var="count")
+
+dist_count_uw_by_cow_man  <- reshape2::dcast(data=dist_summary_by_cow_man,
+                                        v024+sdistri~d_cow_man,value.var="count_uw")
+
+dist_summary_by_cow_man <- reshape2::dcast(data=dist_summary_by_cow_man ,
+                                            v024+sdistri~d_cow_man,value.var="freq")
+
+dist_summary_by_cow_man[is.na(dist_summary_by_cow_man)] <- 0
+dist_count_by_cow_man[is.na(dist_count_by_cow_man)] <- 0
+
+```
+
+Calculating expected number of cases and estimating Goodness-of-fit
+```{r}
+
+dist_count_by_cow_man$expected_dual <- with(dist_count_by_cow_man,
+                                       ((child_overweight + dual)*(mother_anemia+dual))/
+                                         (child_overweight+dual+mother_anemia+neither))
+
+dist_count_by_cow_man$difference_observed_expected <- with(dist_count_by_cow_man,
+                                                      dual-expected_dual)
+
+# dist_count_by_cow_man = chisq_df(dist_count_by_cow_man,district=TRUE)
+dist_count_uw_by_cow_man = chisq_df(dist_count_uw_by_cow_man,district=TRUE)
+
+```
+
+```{r}
+merge_vars <- c("sdistri","expected_dual","difference_observed_expected")
+                # ,"chisq_statistic","chisq_p"
+dist_summary_by_cow_man <- merge(dist_summary_by_cow_man,dist_count_by_cow_man[,merge_vars],
+                                 by="sdistri")
+```
+
+
+
+
+
+####6. COw + MOw
+```{r}
+dist_summary_by_cow_mow <- child_df %>% 
+  group_by(v024, sdistri,d_cow_mow) %>%
+  summarise(count = sum(d_survey_weight), 
+            count_uw = n()) %>%
+  mutate(freq = count/sum(count)) 
+
+dist_count_by_cow_mow <- reshape2::dcast(data=dist_summary_by_cow_mow ,
+                                            v024 +sdistri~d_cow_mow,value.var="count")
+
+dist_count_uw_by_cow_mow  <- reshape2::dcast(data=dist_summary_by_cow_mow,
+                                        v024 + sdistri~d_cow_mow,value.var="count_uw")
+
+dist_summary_by_cow_mow <- reshape2::dcast(data=dist_summary_by_cow_mow ,
+                                            v024 + sdistri~d_cow_mow,value.var="freq")
+
+dist_summary_by_cow_mow[is.na(dist_summary_by_cow_mow)] <- 0
+dist_count_by_cow_mow[is.na(dist_count_by_cow_mow)] <- 0
+
+```
+
+Calculating expected number of cases and estimating Goodness-of-fit
+```{r}
+
+dist_count_by_cow_mow$expected_dual <- with(dist_count_by_cow_mow,
+                                       ((child_overweight + dual)*(mother_overweight+dual))/
+                                         (child_overweight+dual+mother_overweight+neither))
+
+dist_count_by_cow_mow$difference_observed_expected <- with(dist_count_by_cow_mow,
+                                                      dual-expected_dual)
+
+# dist_count_by_cow_mow = chisq_df(dist_count_by_cow_mow,district=TRUE)
+dist_count_uw_by_cow_mow = chisq_df(dist_count_uw_by_cow_mow,district=TRUE)
+
+```
+
+```{r}
+merge_vars <- c("sdistri","expected_dual","difference_observed_expected")
+                # ,"chisq_statistic","chisq_p"
+dist_summary_by_cow_mow <- merge(dist_summary_by_cow_mow,dist_count_by_cow_mow[,merge_vars],
+                                 by="sdistri")
+```
+
+
+
+
+####7. CUw + MUw
+```{r}
+dist_summary_by_cuw_muw <- child_df %>% 
+  group_by(v024, sdistri,d_cuw_muw) %>%
+  summarise(count = sum(d_survey_weight), 
+            count_uw = n()) %>%
+  mutate(freq = count/sum(count)) 
+
+dist_count_by_cuw_muw <- reshape2::dcast(data=dist_summary_by_cuw_muw ,
+                                            v024 +sdistri~d_cuw_muw,value.var="count")
+
+dist_count_uw_by_cuw_muw  <- reshape2::dcast(data=dist_summary_by_cuw_muw,
+                                        v024 + sdistri~d_cuw_muw,value.var="count_uw")
+
+dist_summary_by_cuw_muw <- reshape2::dcast(data=dist_summary_by_cuw_muw ,
+                                            v024 + sdistri~d_cuw_muw,value.var="freq")
+
+dist_summary_by_cuw_muw[is.na(dist_summary_by_cuw_muw)] <- 0
+dist_count_by_cuw_muw[is.na(dist_count_by_cuw_muw)] <- 0
+
+```
+
+Calculating expected number of cases and estimating Goodness-of-fit
+```{r}
+
+dist_count_by_cuw_muw$expected_dual <- with(dist_count_by_cuw_muw,
+                                       ((child_underweight + dual)*(mother_underweight+dual))/
+                                         (child_underweight+dual+mother_underweight+neither))
+
+dist_count_by_cuw_muw$difference_observed_expected <- with(dist_count_by_cuw_muw,
+                                                      dual-expected_dual)
+
+# dist_count_by_cuw_muw = chisq_df(dist_count_by_cuw_muw,district=TRUE)
+dist_count_uw_by_cuw_muw = chisq_df(dist_count_uw_by_cuw_muw,district=TRUE)
+
+```
+
+```{r}
+merge_vars <- c("sdistri","expected_dual","difference_observed_expected")
+                # ,"chisq_statistic","chisq_p"
+dist_summary_by_cuw_muw <- merge(dist_summary_by_cuw_muw,dist_count_by_cuw_muw[,merge_vars],
+                                 by="sdistri")
+```
+
+
+
+####8. CAn + MAn
+
+```{r}
+dist_summary_by_can_man <- child_df %>% 
+  group_by(v024,sdistri, d_can_man) %>%
+  summarise(count = sum(d_survey_weight), 
+            count_uw = n()) %>%
+  mutate(freq = count/sum(count)) 
+
+dist_count_by_can_man <- reshape2::dcast(data=dist_summary_by_can_man ,
+                                            v024 + sdistri~d_can_man,value.var="count")
+dist_count_uw_by_can_man  <- reshape2::dcast(data=dist_summary_by_can_man ,
+                                        v024 + sdistri~d_can_man,value.var="count_uw")
+
+dist_summary_by_can_man <- reshape2::dcast(data=dist_summary_by_can_man ,
+                                            v024 + sdistri~d_can_man,value.var="freq")
+
+dist_summary_by_can_man[is.na(dist_summary_by_can_man)] <- 0
+dist_count_by_can_man[is.na(dist_count_by_can_man)] <- 0
+
+```
+
+Calculating expected number of cases and estimating Goodness-of-fit
+```{r}
+
+dist_count_by_can_man$expected_dual <- with(dist_count_by_can_man,
+                                       ((child_anemia + dual)*(mother_anemia+dual))/
+                                         (child_anemia+dual+mother_anemia+neither))
+
+dist_count_by_can_man$difference_observed_expected <- with(dist_count_by_can_man,
+                                                      dual-expected_dual)
+
+# count_by_can_man = chisq_df(count_by_can_man)
+dist_count_uw_by_can_man = chisq_df(dist_count_uw_by_can_man,district=TRUE)
+
+```
+
+```{r}
+merge_vars <- c("sdistri","expected_dual","difference_observed_expected")
+                # ,"chisq_statistic","chisq_p"
+dist_summary_by_can_man <- merge(dist_summary_by_can_man,dist_count_by_can_man[,merge_vars],
+                                 by="sdistri")
+```
+
+####9. CUw + MAn
+```{r}
+dist_summary_by_cuw_man <- child_df %>% 
+  group_by(v024, sdistri, d_cuw_man) %>%
+  summarise(count = sum(d_survey_weight), 
+            count_uw = n()) %>%
+  mutate(freq = count/sum(count)) 
+
+dist_count_by_cuw_man <- reshape2::dcast(data=dist_summary_by_cuw_man ,
+                                            v024 +sdistri~d_cuw_man,value.var="count")
+
+dist_count_uw_by_cuw_man  <- reshape2::dcast(data=dist_summary_by_cuw_man,
+                                        v024+sdistri~d_cuw_man,value.var="count_uw")
+
+dist_summary_by_cuw_man <- reshape2::dcast(data=dist_summary_by_cuw_man ,
+                                            v024+sdistri~d_cuw_man,value.var="freq")
+
+dist_summary_by_cuw_man[is.na(dist_summary_by_cuw_man)] <- 0
+dist_count_by_cuw_man[is.na(dist_count_by_cuw_man)] <- 0
+
+```
+
+Calculating expected number of cases and estimating Goodness-of-fit
+```{r}
+
+dist_count_by_cuw_man$expected_dual <- with(dist_count_by_cuw_man,
+                                       ((child_underweight + dual)*(mother_anemia+dual))/
+                                         (child_underweight+dual+mother_anemia+neither))
+
+dist_count_by_cuw_man$difference_observed_expected <- with(dist_count_by_cuw_man,
+                                                      dual-expected_dual)
+
+# dist_count_by_cuw_man = chisq_df(dist_count_by_cuw_man,district=TRUE)
+dist_count_uw_by_cuw_man = chisq_df(dist_count_uw_by_cuw_man,district=TRUE)
+
+```
+
+```{r}
+merge_vars <- c("sdistri","expected_dual","difference_observed_expected")
+                # ,"chisq_statistic","chisq_p"
+dist_summary_by_cuw_man <- merge(dist_summary_by_cuw_man,dist_count_by_cuw_man[,merge_vars],
+                                 by="sdistri")
+```
+
+####10. CSt + MUw
+```{r}
+dist_summary_by_cst_muw <- child_df %>% 
+  group_by(v024,sdistri,d_cst_muw) %>%
+  summarise(count = sum(d_survey_weight), 
+            count_uw = n()) %>%
+  mutate(freq = count/sum(count)) 
+
+dist_count_by_cst_muw <- reshape2::dcast(data=dist_summary_by_cst_muw ,
+                                            v024 + sdistri~d_cst_muw,value.var="count")
+
+dist_count_uw_by_cst_muw  <- reshape2::dcast(data=dist_summary_by_cst_muw,
+                                        v024+ sdistri~d_cst_muw,value.var="count_uw")
+
+dist_summary_by_cst_muw <- reshape2::dcast(data=dist_summary_by_cst_muw ,
+                                            v024+ sdistri~d_cst_muw,value.var="freq")
+
+dist_summary_by_cst_muw[is.na(dist_summary_by_cst_muw)] <- 0
+dist_count_by_cst_muw[is.na(dist_count_by_cst_muw)] <- 0
+
+```
+
+Calculating expected number of cases and estimating Goodness-of-fit
+```{r}
+
+dist_count_by_cst_muw$expected_dual <- with(dist_count_by_cst_muw,
+                                       ((child_stunted + dual)*(mother_underweight+dual))/
+                                         (child_stunted+dual+mother_underweight+neither))
+
+dist_count_by_cst_muw$difference_observed_expected <- with(dist_count_by_cst_muw,
+                                                      dual-expected_dual)
+
+# dist_count_by_cst_muw = chisq_df(dist_count_by_cst_muw, district=TRUE)
+dist_count_uw_by_cst_muw = chisq_df(dist_count_uw_by_cst_muw, district=TRUE)
+
+```
+
+```{r}
+merge_vars <- c("sdistri","expected_dual","difference_observed_expected")
+                # ,"chisq_statistic","chisq_p"
+dist_summary_by_cst_muw <- merge(dist_summary_by_cst_muw,dist_count_by_cst_muw[,merge_vars],
+                                 by="sdistri")
+```
+
+####11. CSt + MAn
+```{r}
+dist_summary_by_cst_man <- child_df %>% 
+  group_by(v024,sdistri,d_cst_man) %>%
+  summarise(count = sum(d_survey_weight), 
+            count_uw = n()) %>%
+  mutate(freq = count/sum(count)) 
+
+dist_count_by_cst_man <- reshape2::dcast(data=dist_summary_by_cst_man ,
+                                            v024 + sdistri~d_cst_man,value.var="count")
+
+dist_count_uw_by_cst_man  <- reshape2::dcast(data=dist_summary_by_cst_man,
+                                        v024+ sdistri~d_cst_man,value.var="count_uw")
+
+dist_summary_by_cst_man <- reshape2::dcast(data=dist_summary_by_cst_man ,
+                                            v024+ sdistri~d_cst_man,value.var="freq")
+
+dist_summary_by_cst_man[is.na(dist_summary_by_cst_man)] <- 0
+dist_count_by_cst_man[is.na(dist_count_by_cst_man)] <- 0
+
+```
+
+Calculating expected number of cases and estimating Goodness-of-fit
+```{r}
+
+dist_count_by_cst_man$expected_dual <- with(dist_count_by_cst_man,
+                                       ((child_stunted + dual)*(mother_anemia+dual))/
+                                         (child_stunted+dual+mother_anemia+neither))
+
+dist_count_by_cst_man$difference_observed_expected <- with(dist_count_by_cst_man,
+                                                      dual-expected_dual)
+
+# dist_count_by_cst_man = chisq_df(dist_count_by_cst_man, district=TRUE)
+dist_count_uw_by_cst_man = chisq_df(dist_count_uw_by_cst_man, district=TRUE)
+
+```
+
+```{r}
+merge_vars <- c("sdistri","expected_dual","difference_observed_expected")
+                # ,"chisq_statistic","chisq_p"
+dist_summary_by_cst_man <- merge(dist_summary_by_cst_man,dist_count_by_cst_man[,merge_vars],
+                                 by="sdistri")
+```
+
+####12. CAn + MUw
+```{r}
+dist_summary_by_can_muw <- child_df %>% 
+  group_by(v024,sdistri, d_can_muw) %>%
+  summarise(count = sum(d_survey_weight), 
+            count_uw = n()) %>%
+  mutate(freq = count/sum(count)) 
+
+dist_count_by_can_muw <- reshape2::dcast(data=dist_summary_by_can_muw ,
+                                            v024 + sdistri~d_can_muw,value.var="count")
+dist_count_uw_by_can_muw  <- reshape2::dcast(data=dist_summary_by_can_muw ,
+                                        v024 +sdistri~d_can_muw,value.var="count_uw")
+
+dist_summary_by_can_muw <- reshape2::dcast(data=dist_summary_by_can_muw ,
+                                            v024 +sdistri~d_can_muw,value.var="freq")
+
+dist_summary_by_can_muw[is.na(dist_summary_by_can_muw)] <- 0
+dist_count_by_can_muw[is.na(dist_count_by_can_muw)] <- 0
+
+```
+
+Calculating expected number of cases and estimating Goodness-of-fit
+```{r}
+
+dist_count_by_can_muw$expected_dual <- with(dist_count_by_can_muw,
+                                       ((child_anemia + dual)*(mother_underweight+dual))/
+                                         (child_anemia+dual+mother_underweight+neither))
+
+dist_count_by_can_muw$difference_observed_expected <- with(dist_count_by_can_muw,
+                                                      dual-expected_dual)
+
+# dist_count_by_can_muw = chisq_df(dist_count_by_can_muw,district=TRUE)
+dist_count_uw_by_can_muw = chisq_df(dist_count_uw_by_can_muw,district=TRUE)
+
+```
+
+```{r}
+merge_vars <- c("sdistri","expected_dual","difference_observed_expected")
+                # ,"chisq_statistic","chisq_p"
+dist_summary_by_can_muw <- merge(dist_summary_by_can_muw,dist_count_by_can_muw[,merge_vars],
+                                 by="sdistri")
+```
+
+###6. Formatting into tables
+```{r}
+dist_format_by_can_cow <- format_structure(dist_count_by_can_cow,
+                                      dist_summary_by_can_cow,
+                                      dist_count_uw_by_can_cow,
+                                      district=TRUE)
+
+dist_format_by_cst_cow <- format_structure(dist_count_by_cst_cow,
+                                      dist_summary_by_cst_cow,
+                                      dist_count_uw_by_cst_cow,
+                                      district=TRUE)
+
+dist_format_by_cst_cuw <- format_structure(dist_count_by_cst_cuw,
+                                      dist_summary_by_cst_cuw,
+                                      dist_count_uw_by_cst_cuw,
+                                      district=TRUE)
+
+dist_format_by_cst_can <- format_structure(dist_count_by_cst_can,
+                                      dist_summary_by_cst_can,
+                                      dist_count_uw_by_cst_can,
+                                      district=TRUE)
+
+dist_format_by_can_cuw <- format_structure(dist_count_by_can_cuw,
+                                      dist_summary_by_can_cuw,
+                                      dist_count_uw_by_can_cuw,
+                                      district=TRUE)
+
+
+
+dist_format_by_man_mow <- format_structure(dist_count_by_man_mow,
+                                      dist_summary_by_man_mow,
+                                      dist_count_uw_by_man_mow,
+                                      district=TRUE)
+
+dist_format_by_man_muw <- format_structure(dist_count_by_man_muw,
+                                      dist_summary_by_man_muw,
+                                      dist_count_uw_by_man_muw,
+                                      district=TRUE)
+
+
+dist_format_by_cuw_mow <- format_structure(dist_count_by_cuw_mow,
+                                      dist_summary_by_cuw_mow,
+                                      dist_count_uw_by_cuw_mow,
+                                      district=TRUE)
+
+
+dist_format_by_cst_mow <- format_structure(dist_count_by_cst_mow,
+                                      dist_summary_by_cst_mow,
+                                      dist_count_uw_by_cst_mow,
+                                      district=TRUE)
+
+dist_format_by_can_mow <- format_structure(dist_count_by_can_mow,
+                                      dist_summary_by_can_mow,
+                                      dist_count_uw_by_can_mow,
+                                      district=TRUE)
+
+
+dist_format_by_cow_muw <- format_structure(dist_count_by_cow_muw,
+                                      dist_summary_by_cow_muw,
+                                      dist_count_uw_by_cow_muw,
+                                      district=TRUE)
+
+
+dist_format_by_cow_man <- format_structure(dist_count_by_cow_man,
+                                      dist_summary_by_cow_man,
+                                      dist_count_uw_by_cow_man,
+                                      district=TRUE)
+
+dist_format_by_cow_mow <- format_structure(dist_count_by_cow_mow,
+                                      dist_summary_by_cow_mow,
+                                      dist_count_uw_by_cow_mow,
+                                      district=TRUE)
+
+dist_format_by_cuw_muw <- format_structure(dist_count_by_cuw_muw,
+                                      dist_summary_by_cuw_muw,
+                                      dist_count_uw_by_cuw_muw,
+                                      district=TRUE)
+
+dist_format_by_can_man <- format_structure(dist_count_by_can_man,
+                                      dist_summary_by_can_man,
+                                      dist_count_uw_by_can_man,
+                                      district=TRUE)
+
+
+dist_format_by_cuw_man <- format_structure(dist_count_by_cuw_man,
+                                      dist_summary_by_cuw_man,
+                                      dist_count_uw_by_cuw_man,
+                                      district=TRUE)
+
+dist_format_by_cst_muw <- format_structure(dist_count_by_cst_muw,
+                                      dist_summary_by_cst_muw,
+                                      dist_count_uw_by_cst_muw,
+                                      district=TRUE)
+
+dist_format_by_cst_man <- format_structure(dist_count_by_cst_man,
+                                      dist_summary_by_cst_man,
+                                      dist_count_uw_by_cst_man,
+                                      district=TRUE)
+
+dist_format_by_can_muw <- format_structure(dist_count_by_can_muw,
+                                      dist_summary_by_can_muw,
+                                      dist_count_uw_by_can_muw,
+                                      district=TRUE)
+
+
+```
+
+
+
+
+
+```{r}
+state <- readxl::read_excel(paste0(path_india_documentation,"/variable_list.xlsx"),
+                            sheet="state")
+
+format_by_can_cow <- merge(state,format_by_can_cow,by="v024")
+format_by_cst_cow <- merge(state,format_by_cst_cow,by="v024")
+format_by_cst_cuw <- merge(state,format_by_cst_cuw,by="v024")
+format_by_cst_can <- merge(state,format_by_cst_can,by="v024")
+format_by_can_cuw <- merge(state,format_by_can_cuw,by="v024")
+
+format_by_man_mow <- merge(state,format_by_man_mow,by="v024")
+format_by_man_muw <- merge(state,format_by_man_muw,by="v024")
+
+format_by_can_mow <- merge(state,format_by_can_mow,by="v024")
+format_by_cow_man <- merge(state,format_by_cow_man,by="v024")
+format_by_cow_muw <- merge(state,format_by_cow_muw,by="v024")
+format_by_cst_mow <- merge(state,format_by_cst_mow,by="v024")
+format_by_cuw_mow <- merge(state,format_by_cuw_mow,by="v024")
+format_by_cow_mow <- merge(state,format_by_cow_mow,by="v024")
+format_by_cuw_muw <- merge(state,format_by_cuw_muw,by="v024")
+format_by_can_man <- merge(state,format_by_can_man,by="v024")
+format_by_cuw_man <- merge(state,format_by_cuw_man,by="v024")
+format_by_cst_muw <- merge(state,format_by_cst_muw,by="v024")
+format_by_cst_man <- merge(state,format_by_cst_man,by="v024")
+format_by_can_muw <- merge(state,format_by_can_muw,by="v024")
+
+
+dist_format_by_can_cow <- merge(state,dist_format_by_can_cow,by="v024")
+dist_format_by_cst_cow <- merge(state,dist_format_by_cst_cow,by="v024")
+dist_format_by_cst_cuw <- merge(state,dist_format_by_cst_cuw,by="v024")
+dist_format_by_cst_can <- merge(state,dist_format_by_cst_can,by="v024")
+dist_format_by_can_cuw <- merge(state,dist_format_by_can_cuw,by="v024")
+
+dist_format_by_man_mow <- merge(state,dist_format_by_man_mow,by="v024")
+dist_format_by_man_muw <- merge(state,dist_format_by_man_muw,by="v024")
+
+dist_format_by_can_mow <- merge(state,dist_format_by_can_mow,by="v024")
+dist_format_by_cow_man <- merge(state,dist_format_by_cow_man,by="v024")
+dist_format_by_cow_muw <- merge(state,dist_format_by_cow_muw,by="v024")
+dist_format_by_cst_mow <- merge(state,dist_format_by_cst_mow,by="v024")
+dist_format_by_cuw_mow <- merge(state,dist_format_by_cuw_mow,by="v024")
+dist_format_by_cow_mow <- merge(state,dist_format_by_cow_mow,by="v024")
+dist_format_by_cuw_muw <- merge(state,dist_format_by_cuw_muw,by="v024")
+dist_format_by_can_man <- merge(state,dist_format_by_can_man,by="v024")
+dist_format_by_cuw_man <- merge(state,dist_format_by_cuw_man,by="v024")
+dist_format_by_cst_muw <- merge(state,dist_format_by_cst_muw,by="v024")
+dist_format_by_cst_man <- merge(state,dist_format_by_cst_man,by="v024")
+dist_format_by_can_muw <- merge(state,dist_format_by_can_muw,by="v024")
+
+
+
+gc()
+```
+
+
+
+
+
+###8. Separate summary files
+```{r}
+save_path <- path_india_save
+
+format_files <- ls()
+format_files <- format_files[regexpr("format_by_",format_files)>0]
+
+for(df_name in format_files){
+  write_format_excel(df_name, save_path)
+}
+
+```
+
+
+###9. Weighted Scatterplots
+```{r}
+plot_dual_graph(path_india_data,"can_cow", rsq_pos = "tr",
+                title="Anemia and Overweight in Children 6-59 months")
+```
+
+```{r}
+plot_dual_graph(path_india_data,"cst_cow",rsq_pos = "br",
+                title="Stunting and Overweight in Children 0-59 months")
+```
+
+```{r}
+plot_dual_graph(path_india_data,"cst_cuw",rsq_pos = "tl",
+                title="Stunting and Underweight in Children 0-59 months")
+```
+
+```{r}
+plot_dual_graph(path_india_data,"cst_can", rsq_pos = "tl",
+                title="Stunting and Anemia in Children 6-59 months")
+```
+
+```{r}
+plot_dual_graph(path_india_data,"can_cuw", rsq_pos = "tl",
+                title="Anemia and Underweight in Children 6-59 months")
+```
+
+```{r}
+plot_dual_graph(path_india_data,"man_mow", rsq_pos="tl",
+                title="Anemia in and Overweight in Non-Pregnant Women 15-49 years")
+```
+
+```{r}
+plot_dual_graph(path_india_data,"man_muw", rsq_pos="tl",
+                title="Anemia in and Underweight in Non-Pregnant Women 15-49 years")
+```
+
+
+```{r}
+plot_dual_graph(path_india_data,"cuw_mow", rsq_pos = "tr",
+                title="Underweight in Children 0-59 months and Overweight in Non-Pregnant Mothers")
+```
+
+```{r}
+plot_dual_graph(path_india_data,"cst_mow", rsq_pos = "tr",
+                title="Stunting in Children 0-59 months and Overweight in Non-Pregnant Mothers")
+```
+
+```{r}
+plot_dual_graph(path_india_data,"can_mow", rsq_pos = "tl",
+                title="Anemia in Children 6-59 months and Overweight in Non-Pregnant Mother")
+```
+
+```{r}
+plot_dual_graph(path_india_data,"cow_muw", rsq_pos = "tr",
+                title="Overweight in Children 0-59 months and Underweight in Non-Pregnant Mothers")
+```
+
+```{r}
+plot_dual_graph(path_india_data,"cow_man", rsq_pos = "tr",
+                title="Overweight in Children 0-59 months and Anemia in Non-Pregnant Mothers")
+```
+
+```{r}
+plot_dual_graph(path_india_data,"cuw_muw", rsq_pos = "tl",
+                title="Underweight in Children 0-59 months and Underweight in Non-Pregnant Mothers")
+
+```
+
+
+```{r}
+plot_dual_graph(path_india_data,"cow_mow", rsq_pos = "tr",
+                title="Overweight in Children 0-59 months and Overweight in Non-Pregnant Mothers")
+```
+
+```{r}
+plot_dual_graph(path_india_data,"can_man", rsq_pos="br",
+                title="Anemia in Children 6-59 months and Anemia in Non-Pregnant Mothers")
+```
+
+
+
+
+
+```{r}
+plot_dual_graph(path_india_data,"cuw_man", rsq_pos = "br",
+                title="Underweight in Children 0-59 months and Anemia in Non-Pregnant Mothers")
+```
+
+```{r}
+plot_dual_graph(path_india_data,"cst_muw", rsq_pos="tl",
+                title="Stunting in Children 0-59 months and Underweight in Non-Pregnant Mothers")
+
+```
+
+
+```{r}
+plot_dual_graph(path_india_data,"cst_man", rsq_pos = "br",
+                title="Stunting in Children 0-59 months and Anemia in Non-Pregnant Mothers")
+
+```
+
+```{r}
+plot_dual_graph(path_india_data,"can_muw", rsq_pos = "tl",
+                title="Anemia in Children 6-59 months and Underweight in Non-Pregnant Mothers")
+
+```
+
+
+###10. Wealth Index Plots
+```{r}
+child_df[,d_wealth_index_score := v191/(10^5)]
+individual[,d_wealth_index_score := v191/(10^5)]
+
+wealth_summary <- individual %>% 
+  group_by(v024) %>% 
+  summarize(mean=wtd.mean(d_wealth_index_score,w=d_survey_weight,na.rm=TRUE), sd=sqrt(wtd.var(d_wealth_index_score,w=d_survey_weight,na.rm=TRUE)), median=wtd.quantile(d_wealth_index_score,w=d_survey_weight,na.rm=TRUE,probs=0.5))
+```
+
+```{r}
+plot_wealth_graph(child_df,"format_by_cuw_muw",path_india_data, only_significant = FALSE)
+```
+
+```{r}
+plot_wealth_graph(child_df,"dist_format_by_cuw_muw",path_india_data, only_significant = FALSE)
+```
+
+```{r}
+plot_wealth_graph(child_df,"format_by_can_man",path_india_data, only_significant = FALSE)
+```
+
+```{r}
+plot_wealth_graph(child_df,"dist_format_by_can_man",path_india_data, only_significant = FALSE)
+```
+
+```{r}
+plot_wealth_graph(child_df,"format_by_cow_mow",path_india_data, only_significant = FALSE)
+```
+
+
+```{r}
+plot_wealth_graph(child_df,"dist_format_by_cow_mow",path_india_data, only_significant = FALSE)
+```
+
+```{r}
+plot_wealth_graph(child_df,"format_by_can_muw",path_india_data, only_significant = FALSE)
+
+```
+
+```{r}
+plot_wealth_graph(child_df,"dist_format_by_can_muw",path_india_data, only_significant = FALSE)
+
+```
+
+```{r}
+plot_wealth_graph(child_df,"format_by_cst_man",path_india_data, only_significant = FALSE)
+
+```
+
+```{r}
+plot_wealth_graph(child_df,"dist_format_by_cst_man",path_india_data, only_significant = FALSE)
+
+```
+
+```{r}
+plot_wealth_graph(child_df,"format_by_cst_muw",path_india_data, only_significant = FALSE)
+
+```
+
+```{r}
+plot_wealth_graph(child_df,"dist_format_by_cst_muw",path_india_data, only_significant = FALSE)
+
+```
+
+```{r}
+plot_wealth_graph(child_df,"format_by_cst_cow",path_india_data, only_significant = FALSE)
+
+```
+
+```{r}
+plot_wealth_graph(child_df,"dist_format_by_cst_cow",path_india_data, only_significant = FALSE)
+
+```
+
+```{r}
+plot_wealth_graph(child_df,"format_by_cst_can",path_india_data, only_significant = FALSE)
+
+```
+
+```{r}
+plot_wealth_graph(child_df,"dist_format_by_cst_can",path_india_data, only_significant = FALSE)
+
+```
+
+```{r}
+plot_wealth_graph(child_df,"format_by_can_cuw",path_india_data, only_significant = FALSE)
+
+```
+
+```{r}
+plot_wealth_graph(child_df,"dist_format_by_can_cuw",path_india_data, only_significant = FALSE)
+
+```
+
+```{r}
+plot_wealth_graph(individual,"format_by_man_muw",path_india_data, only_significant = FALSE,
+                  var_name="d_anemia_underweight")
+```
+
+```{r}
+plot_wealth_graph(individual,"dist_format_by_man_muw",path_india_data, only_significant = FALSE,
+                  var_name="d_anemia_underweight")
+```
+
+
+
+
+###11. Consolidated table
+####1. State Table
+```{r}
+# chisq_alpha <- 0.05/36
+chisq_alpha <- 0.05
+
+format_files <- ls()
+state_format_files <- format_files[regexpr("format_by_",format_files)>0 &
+                                           regexpr("dist_",format_files)<0]
+
+n_state_format_files <- length(state_format_files)
+
+# state_table[1:n_state_format_files,] <- NA
+
+burden_pair= list()
+name_burden1= list()
+name_burden2= list()
+
+sample_size_mean= list()
+sample_size_median= list()
+sample_size_iqr= list()
+sample_size_range= list()
+
+prevalence_burden1_mean= list()
+prevalence_burden1_median= list()
+prevalence_burden1_iqr= list()
+prevalence_burden1_range= list()
+
+prevalence_burden2_mean= list()
+prevalence_burden2_median= list()
+prevalence_burden2_iqr= list()
+prevalence_burden2_range= list()
+
+observed_dual_mean= list()
+observed_dual_median= list()
+observed_dual_iqr= list()
+observed_dual_range= list()
+
+difference_dual_mean= list()
+difference_dual_median= list()
+difference_dual_iqr= list()
+difference_dual_range= list()
+
+o_e_sig= list()
+e_o_sig=list()
+
+cor_r = list()
+cor_p = list()
+
+
+for(n_file in c(1:n_state_format_files)){
+  file_name <- state_format_files[n_file]
+  format_df <- get(file_name)
+  
+  #1. Burden Name
+  burden_name <- str_replace(file_name,"format_by_","")
+  burden_name <- str_replace(burden_name,"_","-")
+  burden_name <- toupper(burden_name)
+  print(burden_name)
+  burden_pair[n_file] <- burden_name
+  
+  
+
+  
+  #2. Sample Size
+  median_ss <- round(median(format_df$d_unweighted_observations_noNA,na.rm=TRUE),0)
+  mean_ss <- round(mean(format_df$d_unweighted_observations_noNA,na.rm=TRUE),0)
+  
+  range_ss <- paste0(round(min(format_df$d_unweighted_observations_noNA,na.rm=TRUE),0),"; ",
+                     round(max(format_df$d_unweighted_observations_noNA,na.rm=TRUE),0))
+
+  iqr_ss <- paste0(round(quantile(format_df$d_unweighted_observations_noNA,0.25),0)," ;",
+                   round(quantile(format_df$d_unweighted_observations_noNA,0.75),0))
+  
+  sample_size_mean[n_file] <- mean_ss
+  sample_size_median[n_file] <- median_ss
+  sample_size_iqr[n_file] <- iqr_ss
+  sample_size_range[n_file] <- range_ss
+  
+  wtd_obs_noNA_index <- match("d_weighted_observations_noNA",colnames(format_df))
+  
+  #3. Burden 1 Prevalence
+  burden1_name <- colnames(format_df)[wtd_obs_noNA_index+1]
+    
+  format_df[,"burden1"] <- format_df[,burden1_name] + format_df[,"dual"]
+  median_b1 <- percentage_format(median(format_df[,"burden1"],na.rm=TRUE))
+  mean_b1 <- percentage_format(mean(format_df[,"burden1"],na.rm=TRUE))
+  
+  range_b1 <- paste0(percentage_format(min(format_df[,"burden1"],na.rm=TRUE)),"; ",
+                     percentage_format(max(format_df[,"burden1"],na.rm=TRUE)))
+
+  iqr_b1 <- paste0(percentage_format(quantile(format_df[,"burden1"],0.25))," ;",
+                   percentage_format(quantile(format_df[,"burden1"],0.75)))
+  
+  burden1_name <- str_replace(burden1_name,"_"," ")
+  burden1_name <- toupper(burden1_name)
+  # state_table[n_file,"name_burden1"] <- burden1_name
+  name_burden1[n_file] <- burden1_name
+  
+  # state_table[n_file,"prevalence_burden1"] <- burden1_stats
+  prevalence_burden1_mean[n_file] <- mean_b1
+  prevalence_burden1_median[n_file] <- median_b1
+  prevalence_burden1_iqr[n_file] <- iqr_b1
+  prevalence_burden1_range[n_file] <- range_b1
+  
+  #4. Burden 2 Prevalence
+  burden2_name <- colnames(format_df)[wtd_obs_noNA_index+2]
+    
+  
+  format_df[,"burden2"] <- format_df[,burden2_name] + format_df[,"dual"]
+  median_b2 <- percentage_format(median(format_df[,"burden2"],na.rm=TRUE))
+  mean_b2 <- percentage_format(mean(format_df[,"burden2"],na.rm=TRUE))
+  
+  range_b2 <- paste0(percentage_format(min(format_df[,"burden2"],na.rm=TRUE))," ;\n",
+                     percentage_format(max(format_df[,"burden2"],na.rm=TRUE)))
+
+  iqr_b2 <- paste0(percentage_format(quantile(format_df[,"burden2"],0.25))," ;\n",
+                   percentage_format(quantile(format_df[,"burden2"],0.75)))
+  
+  burden2_name <- str_replace(burden2_name,"_"," ")
+  burden2_name <- toupper(burden2_name)
+  # state_table[n_file,"name_burden2"] <- burden2_name
+  name_burden2[n_file] <- burden2_name
+  
+  prevalence_burden2_mean[n_file] <- mean_b2
+  prevalence_burden2_median[n_file] <- median_b2
+  prevalence_burden2_iqr[n_file] <- iqr_b2
+  prevalence_burden2_range[n_file] <- range_b2
+
+  #5. Observed Dual Prevalence
+  median_observed <- percentage_format(median(format_df[,"dual"],na.rm=TRUE))
+  mean_observed <- percentage_format(mean(format_df[,"dual"],na.rm=TRUE))
+  
+  range_observed <- paste0(percentage_format(min(format_df[,"dual"],na.rm=TRUE))," ;\n",
+                     percentage_format(max(format_df[,"dual"],na.rm=TRUE)))
+
+  iqr_observed <- paste0(percentage_format(quantile(format_df[,"dual"],0.25))," ;\n",
+                   percentage_format(quantile(format_df[,"dual"],0.75)))
+ 
+  observed_dual_mean[n_file] <- mean_observed
+  observed_dual_median[n_file] <- median_observed
+  observed_dual_iqr[n_file] <- iqr_observed
+  observed_dual_range[n_file] <- range_observed
+
+   
+  #6. Difference
+  format_df$difference <- with(format_df,dual - expected_dual_proportion)
+  
+  median_difference <- percentage_format(median(format_df[,"difference"],na.rm=TRUE))
+  mean_difference <- percentage_format(mean(format_df[,"difference"],na.rm=TRUE))
+  
+  range_difference <- paste0(percentage_format(min(format_df[,"difference"],na.rm=TRUE))," ;\n",
+                     percentage_format(max(format_df[,"difference"],na.rm=TRUE)))
+
+  iqr_difference <- paste0(percentage_format(quantile(format_df[,"difference"],0.25))," ;\n",
+                   percentage_format(quantile(format_df[,"difference"],0.75)))
+ 
+  difference_dual_mean[n_file] <- mean_difference
+  difference_dual_median[n_file] <- median_difference
+  difference_dual_iqr[n_file] <- iqr_difference
+  difference_dual_range[n_file] <- range_difference
+  
+  #7. O-E Sig
+  format_df$oe_sig <- with(format_df,
+                           ifelse(!is.na(chisq_p) & chisq_p<chisq_alpha & difference>0,1,0))
+  # state_table[n_file,"o_e_sig"] <- sum(format_df$oe_sig)
+  o_e_sig[n_file] <- sum(format_df$oe_sig)
+  
+  format_df$eo_sig <- with(format_df,
+                           ifelse(!is.na(chisq_p) & chisq_p<chisq_alpha & difference<0,1,0))
+  # state_table[n_file,"e_o_sig"] <- sum(format_df$eo_sig)
+  e_o_sig[n_file] <- sum(format_df$eo_sig)
+  
+  #9. Correlations
+  burden1_name <- colnames(format_df)[wtd_obs_noNA_index+1]
+  burden2_name <- colnames(format_df)[wtd_obs_noNA_index+2]
+  
+  format_df$total_b1 <- format_df[,burden1_name] + format_df[,"dual"]
+  format_df$total_b2 <- format_df[,burden2_name] + format_df[,"dual"]
+  
+  r_cor <- cor(format_df$total_b1, format_df$total_b2)
+  p_cor <- cor.test(format_df$total_b1, format_df$total_b2)$p.value
+  
+  cor_r[n_file] = round(r_cor,2)
+  cor_p[n_file] = ifelse(p_cor< 0.001,"<0.001",
+                         ifelse(p_cor<0.01,round(p_cor,3),round(p_cor,2)))
+  }
+
+state_table <- data.frame(burden_pair=unlist(burden_pair),
+                          name_burden1= unlist(name_burden1),
+                          name_burden2= unlist(name_burden2),
+                          
+                          sample_size_mean= unlist(sample_size_mean),
+                          sample_size_median= unlist(sample_size_median),
+                          sample_size_iqr= unlist(sample_size_iqr),
+                          sample_size_range= unlist(sample_size_range),
+                          
+                          prevalence_burden1_mean= unlist(prevalence_burden1_mean),
+                          prevalence_burden1_median= unlist(prevalence_burden1_median),
+                          prevalence_burden1_iqr= unlist(prevalence_burden1_iqr),
+                          prevalence_burden1_range= unlist(prevalence_burden1_range),
+                          
+                          prevalence_burden2_mean= unlist(prevalence_burden2_mean),
+                          prevalence_burden2_median= unlist(prevalence_burden2_median),
+                          prevalence_burden2_iqr= unlist(prevalence_burden2_iqr),
+                          prevalence_burden2_range= unlist(prevalence_burden2_range),
+                          
+                          observed_dual_mean= unlist(observed_dual_mean),
+                          observed_dual_median= unlist(observed_dual_median),
+                          observed_dual_iqr= unlist(observed_dual_iqr),
+                          observed_dual_range= unlist(observed_dual_range),
+                          
+                          difference_dual_mean= unlist(difference_dual_mean),
+                          difference_dual_median= unlist(difference_dual_median),
+                          difference_dual_iqr= unlist(difference_dual_iqr),
+                          difference_dual_range= unlist(difference_dual_range),
+                          
+                          o_e_sig=unlist(o_e_sig),
+                          e_o_sig=unlist(e_o_sig),
+                          
+                          cor_r = unlist(cor_r),
+                          cor_p = unlist(cor_p)
+                          )
+
+
+
+```
+
+####2. District Table
+```{r}
+# chisq_alpha <- 0.05/36
+chisq_alpha <- 0.05
+
+format_files <- ls()
+district_format_files <- format_files[regexpr("format_by_",format_files)>0 &
+                                           regexpr("dist_",format_files)>0]
+
+n_district_format_files <- length(district_format_files)
+
+# district_table[1:n_district_format_files,] <- NA
+
+burden_pair= list()
+name_burden1= list()
+name_burden2= list()
+
+sample_size_mean= list()
+sample_size_median= list()
+sample_size_iqr= list()
+sample_size_range= list()
+
+prevalence_burden1_mean= list()
+prevalence_burden1_median= list()
+prevalence_burden1_iqr= list()
+prevalence_burden1_range= list()
+
+prevalence_burden2_mean= list()
+prevalence_burden2_median= list()
+prevalence_burden2_iqr= list()
+prevalence_burden2_range= list()
+
+observed_dual_mean= list()
+observed_dual_median= list()
+observed_dual_iqr= list()
+observed_dual_range= list()
+
+difference_dual_mean= list()
+difference_dual_median= list()
+difference_dual_iqr= list()
+difference_dual_range= list()
+
+o_e_sig= list()
+e_o_sig=list()
+
+cor_r = list()
+cor_p = list()
+
+
+for(n_file in c(1:n_district_format_files)){
+  file_name <- district_format_files[n_file]
+  format_df <- get(file_name)
+  
+  #1. Burden Name
+  burden_name <- str_replace(file_name,"format_by_","")
+  burden_name <- str_replace(burden_name,"_","-")
+  burden_name <- toupper(burden_name)
+  print(burden_name)
+  burden_pair[n_file] <- burden_name
+  
+  
+
+  
+  #2. Sample Size
+  median_ss <- round(median(format_df$d_unweighted_observations_noNA,na.rm=TRUE),0)
+  mean_ss <- round(mean(format_df$d_unweighted_observations_noNA,na.rm=TRUE),0)
+  
+  range_ss <- paste0(round(min(format_df$d_unweighted_observations_noNA,na.rm=TRUE),0)," ;\n",
+                     round(max(format_df$d_unweighted_observations_noNA,na.rm=TRUE),0))
+
+  iqr_ss <- paste0(round(quantile(format_df$d_unweighted_observations_noNA,0.25),0)," ;\n",
+                   round(quantile(format_df$d_unweighted_observations_noNA,0.75),0))
+  
+  sample_size_mean[n_file] <- mean_ss
+  sample_size_median[n_file] <- median_ss
+  sample_size_iqr[n_file] <- iqr_ss
+  sample_size_range[n_file] <- range_ss
+  
+  wtd_obs_noNA_index <- match("d_weighted_observations_noNA",colnames(format_df))
+  
+  #3. Burden 1 Prevalence
+  burden1_name <- colnames(format_df)[wtd_obs_noNA_index+1]
+    
+  
+  format_df[,"burden1"] <- format_df[,burden1_name] + format_df[,"dual"]
+  median_b1 <- percentage_format(median(format_df[,"burden1"],na.rm=TRUE))
+  mean_b1 <- percentage_format(mean(format_df[,"burden1"],na.rm=TRUE))
+  
+  range_b1 <- paste0(percentage_format(min(format_df[,"burden1"],na.rm=TRUE))," ;\n",
+                     percentage_format(max(format_df[,"burden1"],na.rm=TRUE)))
+
+  iqr_b1 <- paste0(percentage_format(quantile(format_df[,"burden1"],0.25))," ;\n",
+                   percentage_format(quantile(format_df[,"burden1"],0.75)))
+  
+  burden1_name <- str_replace(burden1_name,"_"," ")
+  burden1_name <- toupper(burden1_name)
+  # district_table[n_file,"name_burden1"] <- burden1_name
+  name_burden1[n_file] <- burden1_name
+  
+  # district_table[n_file,"prevalence_burden1"] <- burden1_stats
+  prevalence_burden1_mean[n_file] <- mean_b1
+  prevalence_burden1_median[n_file] <- median_b1
+  prevalence_burden1_iqr[n_file] <- iqr_b1
+  prevalence_burden1_range[n_file] <- range_b1
+  
+  #4. Burden 2 Prevalence
+  burden2_name <- colnames(format_df)[wtd_obs_noNA_index+2]
+    
+  
+  format_df[,"burden2"] <- format_df[,burden2_name] + format_df[,"dual"]
+  median_b2 <- percentage_format(median(format_df[,"burden2"],na.rm=TRUE))
+  mean_b2 <- percentage_format(mean(format_df[,"burden2"],na.rm=TRUE))
+  
+  range_b2 <- paste0(percentage_format(min(format_df[,"burden2"],na.rm=TRUE))," ;\n",
+                     percentage_format(max(format_df[,"burden2"],na.rm=TRUE)))
+
+  iqr_b2 <- paste0(percentage_format(quantile(format_df[,"burden2"],0.25))," ;\n",
+                   percentage_format(quantile(format_df[,"burden2"],0.75)))
+  
+  burden2_name <- str_replace(burden2_name,"_"," ")
+  burden2_name <- toupper(burden2_name)
+  # district_table[n_file,"name_burden2"] <- burden2_name
+  name_burden2[n_file] <- burden2_name
+  
+  prevalence_burden2_mean[n_file] <- mean_b2
+  prevalence_burden2_median[n_file] <- median_b2
+  prevalence_burden2_iqr[n_file] <- iqr_b2
+  prevalence_burden2_range[n_file] <- range_b2
+
+  #5. Observed Dual Prevalence
+  median_observed <- percentage_format(median(format_df[,"dual"],na.rm=TRUE))
+  mean_observed <- percentage_format(mean(format_df[,"dual"],na.rm=TRUE))
+  
+  range_observed <- paste0(percentage_format(min(format_df[,"dual"],na.rm=TRUE))," ;\n",
+                     percentage_format(max(format_df[,"dual"],na.rm=TRUE)))
+
+  iqr_observed <- paste0(percentage_format(quantile(format_df[,"dual"],0.25))," ;\n",
+                   percentage_format(quantile(format_df[,"dual"],0.75)))
+ 
+  observed_dual_mean[n_file] <- mean_observed
+  observed_dual_median[n_file] <- median_observed
+  observed_dual_iqr[n_file] <- iqr_observed
+  observed_dual_range[n_file] <- range_observed
+
+   
+  #6. Difference
+  format_df$difference <- with(format_df,dual - expected_dual_proportion)
+  
+  median_difference <- percentage_format(median(format_df[,"difference"],na.rm=TRUE))
+  mean_difference <- percentage_format(mean(format_df[,"difference"],na.rm=TRUE))
+  
+  range_difference <- paste0(percentage_format(min(format_df[,"difference"],na.rm=TRUE))," ;\n",
+                     percentage_format(max(format_df[,"difference"],na.rm=TRUE)))
+
+  iqr_difference <- paste0(percentage_format(quantile(format_df[,"difference"],0.25))," ;\n",
+                   percentage_format(quantile(format_df[,"difference"],0.75)))
+ 
+  difference_dual_mean[n_file] <- mean_difference
+  difference_dual_median[n_file] <- median_difference
+  difference_dual_iqr[n_file] <- iqr_difference
+  difference_dual_range[n_file] <- range_difference
+  
+  #7. O-E Sig
+  format_df$oe_sig <- with(format_df,
+                           ifelse(!is.na(chisq_p) & chisq_p<chisq_alpha & difference>0,1,0))
+  # district_table[n_file,"o_e_sig"] <- sum(format_df$oe_sig)
+  o_e_sig[n_file] <- sum(format_df$oe_sig)
+  
+  format_df$eo_sig <- with(format_df,
+                           ifelse(!is.na(chisq_p) & chisq_p<chisq_alpha & difference<0,1,0))
+  # district_table[n_file,"e_o_sig"] <- sum(format_df$eo_sig)
+  e_o_sig[n_file] <- sum(format_df$eo_sig)
+  
+  #9. Correlations
+  burden1_name <- colnames(format_df)[wtd_obs_noNA_index+1]
+  burden2_name <- colnames(format_df)[wtd_obs_noNA_index+2]
+  
+  format_df$total_b1 <- format_df[,burden1_name] + format_df[,"dual"]
+  format_df$total_b2 <- format_df[,burden2_name] + format_df[,"dual"]
+  
+  r_cor <- cor(format_df$total_b1, format_df$total_b2)
+  p_cor <- cor.test(format_df$total_b1, format_df$total_b2)$p.value
+  
+  cor_r[n_file] = round(r_cor,2)
+  cor_p[n_file] = ifelse(p_cor< 0.001,"<0.001",
+                         ifelse(p_cor<0.01,round(p_cor,3),round(p_cor,2)))
+  }
+
+district_table <- data.frame(burden_pair=unlist(burden_pair),
+                          name_burden1= unlist(name_burden1),
+                          name_burden2= unlist(name_burden2),
+                          
+                          sample_size_mean= unlist(sample_size_mean),
+                          sample_size_median= unlist(sample_size_median),
+                          sample_size_iqr= unlist(sample_size_iqr),
+                          sample_size_range= unlist(sample_size_range),
+                          
+                          prevalence_burden1_mean= unlist(prevalence_burden1_mean),
+                          prevalence_burden1_median= unlist(prevalence_burden1_median),
+                          prevalence_burden1_iqr= unlist(prevalence_burden1_iqr),
+                          prevalence_burden1_range= unlist(prevalence_burden1_range),
+                          
+                          prevalence_burden2_mean= unlist(prevalence_burden2_mean),
+                          prevalence_burden2_median= unlist(prevalence_burden2_median),
+                          prevalence_burden2_iqr= unlist(prevalence_burden2_iqr),
+                          prevalence_burden2_range= unlist(prevalence_burden2_range),
+                          
+                          observed_dual_mean= unlist(observed_dual_mean),
+                          observed_dual_median= unlist(observed_dual_median),
+                          observed_dual_iqr= unlist(observed_dual_iqr),
+                          observed_dual_range= unlist(observed_dual_range),
+                          
+                          difference_dual_mean= unlist(difference_dual_mean),
+                          difference_dual_median= unlist(difference_dual_median),
+                          difference_dual_iqr= unlist(difference_dual_iqr),
+                          difference_dual_range= unlist(difference_dual_range),
+                          
+                          o_e_sig=unlist(o_e_sig),
+                          e_o_sig=unlist(e_o_sig),
+                          
+                          cor_r = unlist(cor_r),
+                          cor_p = unlist(cor_p)
+                          )
+
+
+
+```
+
+```{r}
+save_path <- path_india_save
+
+xlsx::write.xlsx(state_table,
+                 file=paste0(save_path,"/state_consolidated.xlsx"),
+                 sheetName="state_consolidated",
+                 append=TRUE,
+                 row.names = FALSE)
+
+xlsx::write.xlsx(district_table,
+                 file=paste0(save_path,"/district_consolidated.xlsx"),
+                 sheetName="district_consolidated",
+                 append=TRUE,
+                 row.names = FALSE)
+
+```
+
+###12. Is CST-COW due to height on "both sides" of stunting/overweight relationship
+
+```{r}
+path_india_documentation <- "C:/Analysis/dual_burden/india/documentation"
+path_india_data <- "C:/Analysis/data/india/nfhs_4/working"
+path_india_package <- "C:/Analysis/dual_burden/package"
+path_india_save <- "C:/Analysis/writing/dual_burden/data_sharing"
+
+```
+
+
+```{r}
+child_df <- readRDS(paste0(path_india_data,"/child_df_20181111.RDS"))
+load(paste0(path_india_data,"/summary_tables_20181111.RData"))
+```
+
+####a. Individual
+```{r}
+child_df[,d_haz:=ifelse(hw5 < -600 |hw5 > 600, NA,hw5/100)]
+child_df[,d_waz:=ifelse(hw8 < -600 |hw8 > 500, NA,hw8/100)]
+child_df[,d_whz:=ifelse(hw11 < -500 |hw11 > 500, NA,hw11/100)]
+
+
+model_haz_whz <- lm(d_whz~d_haz,data=child_df)
+# print(model_df)
+
+plot_caption <- paste0("R-squared= ",
+                       round(summary(model_haz_whz)$r.squared,2))
+                       
+                       
+
+child_haz_whz_plot <- ggplot(data=child_df,aes(x=d_haz,y=d_whz)) + theme_bw()
+child_haz_whz_plot <- child_haz_whz_plot + geom_point(size=0.001) + geom_smooth(method="lm",colour="black")
+
+child_haz_whz_plot <- child_haz_whz_plot  + labs(x="Height-for-age z-score",
+                                                 y= "Weight-for-Height z-score",
+                                                 caption = plot_caption)
+child_haz_whz_plot <- child_haz_whz_plot + theme(axis.title.x = element_text(size=12),
+                                                 axis.title.y = element_text(size=12))
+child_haz_whz_plot <- child_haz_whz_plot + ggtitle("Individual")
+child_haz_whz_plot <- child_haz_whz_plot + expand_limits(x=0,y=0)
+
+print(child_haz_whz_plot)
+
+
+```
+
+####b. State
+```{r}
+
+state_haz_whz_df <- child_df %>% 
+  group_by(v024) %>%
+  summarize(d_haz=wtd.mean(d_haz,w=d_survey_weight,na.rm=TRUE),
+            d_waz = wtd.mean(d_waz,w=d_survey_weight,na.rm=TRUE),
+            d_whz = wtd.mean(d_whz,w=d_survey_weight,na.rm=TRUE))
+
+model_haz_whz <- lm(d_whz~d_haz,data=state_haz_whz_df)
+# print(model_df)
+
+corr_haz_whz <- paste0("r = ",
+                      round(with(state_haz_whz_df,cor(d_whz,d_haz)),2),
+                      ", p < 0.005")
+
+plot_caption <- corr_haz_whz
+                       
+state_x_max = max(state_haz_whz_df$d_haz)                       
+state_y_max = max(state_haz_whz_df$d_whz)                       
+
+state_haz_whz_plot <- ggplot(data=state_haz_whz_df,aes(x=d_haz,y=d_whz)) + theme_bw()
+state_haz_whz_plot <- state_haz_whz_plot + geom_point(size=6) 
+state_haz_whz_plot <- state_haz_whz_plot + geom_smooth(method="lm",colour="black") + theme(plot.title = element_text(size = rel(1.1),face ='bold'))
+
+state_haz_whz_plot <- state_haz_whz_plot  + labs(x="Height-for-age z-score",
+                                                 y= "Weight-for-Height z-score",
+                                                 title="A. State (n=36)")
+state_haz_whz_plot <- state_haz_whz_plot + annotate("text",size=10,
+                                                    label= plot_caption,
+                                                    x=-1.2,
+                                                    y=0)
+state_haz_whz_plot <- state_haz_whz_plot + theme(axis.title.x = element_text(size=22),
+                                                 axis.title.y = element_text(size=22),
+                                                 plot.title = element_text(size=28),
+                                                 axis.text.x = element_text(size=22),
+                                                 axis.text.y = element_text(size=22),
+                                                 plot.margin = margin(0,100,0,40)
+                                                 )
+# Definition margin(t = 0, r = 0, b = 0, l = 0, unit = "pt")
+
+state_haz_whz_plot <- state_haz_whz_plot + expand_limits(x=0,y=0)
+print(state_haz_whz_plot)
+```
+
+####c. District
+```{r}
+district_haz_whz_df <- child_df %>% 
+  group_by(sdistri) %>%
+  summarize(d_haz=wtd.mean(d_haz,w=d_survey_weight,na.rm=TRUE),
+            d_waz = wtd.mean(d_waz,w=d_survey_weight,na.rm=TRUE),
+            d_whz = wtd.mean(d_whz,w=d_survey_weight,na.rm=TRUE))
+
+model_haz_whz <- lm(d_whz~d_haz,data=district_haz_whz_df)
+
+corr_haz_whz <- paste0("r = ",
+                      round(with(district_haz_whz_df,cor(d_whz,d_haz)),2),
+                      ", p < 0.0001")
+
+plot_caption <- corr_haz_whz
+                       
+district_x_max = max(district_haz_whz_df$d_haz)                       
+district_y_max = max(district_haz_whz_df$d_whz)                       
+                      
+
+district_haz_whz_plot <- ggplot(data=district_haz_whz_df,aes(x=d_haz,y=d_whz)) + theme_bw()
+district_haz_whz_plot <- district_haz_whz_plot + geom_point(size=2) + geom_smooth(method="lm",colour="black") + theme(plot.title = element_text(size = rel(1.1),face ='bold'))
+
+district_haz_whz_plot <- district_haz_whz_plot  + labs(x="Height-for-age z-score",
+                                                 y= "Weight-for-Height z-score",
+                                                 title="B. District (n=640)")
+district_haz_whz_plot <- district_haz_whz_plot + annotate("text",size=10,
+                                                    label= plot_caption,
+                                                    x=-1.8,
+                                                    y=0)
+
+district_haz_whz_plot <- district_haz_whz_plot + theme(axis.title.x = element_text(size=22),
+                                                 axis.title.y = element_text(size=22),
+                                                 plot.title = element_text(size=28),
+                                                 axis.text.x = element_text(size=22),
+                                                 axis.text.y = element_text(size=22),
+                                                 plot.margin = margin(0,100,0,40)
+                                                 )
+district_haz_whz_plot <- district_haz_whz_plot + expand_limits(x=0,y=0)
+# district_haz_whz_plot <- district_haz_whz_plot + scale_x_continuous(expand=c(0,0)) 
+# district_haz_whz_plot <- district_haz_whz_plot + scale_y_continuous(expand=c(0,0))
+print(district_haz_whz_plot)
+
+```
+
+####HAZ Proportion
+```{r}
+child_df[,d_haz_category:=cut(d_haz,breaks=c(-6,-3,-2,0,2,6))]
+
+haz_proportion <- child_df %>% group_by(d_haz_category) %>% summarize(survey_weight=sum(d_survey_weight)) %>% filter(!is.na(d_haz_category)) %>% mutate(prop_survey_weight = survey_weight*100/sum(survey_weight))
+
+levels(haz_proportion$d_haz_category) <- c(paste0(-6," < x \u2264 ",-3),
+                                           paste0(-3," < x \u2264 ",-2),
+                                           paste0(-2," < x \u2264 ",0),
+                                           paste0(0," < x \u2264 ",2),
+                                           paste0(2," < x \u2264 ",6))
+
+```
+
+
+####d. Overweight
+```{r}
+
+overweight_by_haz <- child_df %>% 
+  group_by(d_haz_category) %>% 
+  summarize(c_d_overweight=wtd.mean(c_d_overweight,w=d_survey_weight,na.rm = TRUE),
+            sample_size=n())
+overweight_by_haz$group <- "group"
+
+overweight_by_haz <- overweight_by_haz[!is.na(overweight_by_haz$d_haz_category),]
+
+```
+
+#####1. ggplot
+```{r}
+
+
+ow_haz_plot <- ggplot() + theme_bw() + ggtitle("C. Overweight (%) by HAZ category")
+ow_haz_plot <- ow_haz_plot + xlab("Categories of HAZ") + ylab("Prevalence of Overweight (%)")
+
+ow_haz_plot <- ow_haz_plot + theme(plot.title = element_text(size = rel(1.4),face ='bold')) +  geom_point(data=overweight_by_haz,aes(x=d_haz_category,y=c_d_overweight*100)) + geom_path(data=overweight_by_haz,aes(x=d_haz_category,y=c_d_overweight*100,group=group))
+
+print(ow_haz_plot)
+ggsave(paste0("overweight_haz_categories_ggplot",".png"),
+       plot=ow_haz_plot,device="png",
+       path = path_india_data,scale=1)
+
+```
+
+
+
+#####2. base plot
+```{r}
+# https://www.r-bloggers.com/r-single-plot-with-two-different-y-axes/
+png(paste0(path_india_data,"/overweight_haz_categories_baseplot.png")
+    # ,width=3.25,height=3.25,
+          # units="in",res=1200,pointsize = 2
+    )
+par(mar=c(4,4,4,4),xaxs = "i",yaxs = "i",cex.axis=1.3,cex.lab=1)
+with(haz_proportion, barplot(height=prop_survey_weight,axes=F))
+axis(side = 4)
+mtext(side = 4, line = 3, 'Density (%)')
+
+
+
+# axis(2,"Prevalence of Overweight (%)")
+
+
+
+par(new = T,xaxs = "i",yaxs = "i",cex.axis=1.3,cex.lab=1)
+plot(as.numeric(overweight_by_haz$d_haz_category), 
+     overweight_by_haz$c_d_overweight*100, type = "l", xaxt="n",
+     main= "C. Overweight (%) by HAZ category",
+     xlab= "Categories of HAZ",
+     ylab="Prevalence of Overweight (%)"
+     )
+
+points(as.numeric(overweight_by_haz$d_haz_category), 
+       overweight_by_haz$c_d_overweight*100,  xaxt = "n")
+axis(1, labels = as.character(overweight_by_haz$d_haz_category), 
+     at = as.numeric(overweight_by_haz$d_haz_category),
+     "Categories of HAZ")
+dev.off()
+
+
+```
+
+####e. Underweight
+```{r}
+child_df[,d_haz_category:=cut(d_haz,breaks=c(-6,-3,-2,0,2,6))]
+
+
+underweight_by_haz <- child_df %>% 
+  group_by(d_haz_category) %>% 
+  summarize(c_d_underweight=wtd.mean(c_d_underweight,w=d_survey_weight,na.rm = TRUE),
+            sample_size=n())
+
+underweight_by_haz$group <- "group"
+
+underweight_by_haz <- underweight_by_haz[!is.na(underweight_by_haz$d_haz_category),]
+
+```
+
+#####1. ggplot
+```{r}
+
+uw_haz_plot <- ggplot() + theme_bw() + ggtitle("D. Underweight (%) by HAZ category")
+uw_haz_plot <- uw_haz_plot + xlab("Categories of HAZ") + ylab("Prevalence of Underweight (%)")
+
+uw_haz_plot <- uw_haz_plot + theme(plot.title = element_text(size = rel(1.4),face ='bold')) +  geom_point(data=underweight_by_haz,aes(x=d_haz_category,y=c_d_underweight*100)) + geom_path(data=underweight_by_haz,aes(x=d_haz_category,y=c_d_underweight*100,group=group))
+
+print(uw_haz_plot)
+ggsave(paste0("underweight_haz_categories_ggplot",".png"),
+       plot=uw_haz_plot,device="png",
+       path = path_india_data,scale=1)
+
+
+```
+
+#####2. base plot
+```{r}
+png(paste0(path_india_data,"/underweight_haz_categories_baseplot.png")
+    # ,width=3.25,height=3.25,
+    # units="in",res=1200,pointsize = 2
+    )
+
+par(mar=c(4,4,4,4),xaxs = "i",yaxs = "i",cex.axis=1.3,cex.lab=1)
+with(haz_proportion, barplot(height=prop_survey_weight,axes=F))
+axis(side = 4)
+mtext(side = 4, line = 3, 'Density (%)')
+
+
+
+# axis(2,"Prevalence of Overweight (%)")
+
+
+
+par(new = T,xaxs = "i",yaxs = "i",cex.axis=1.3,cex.lab=1)
+plot(as.numeric(underweight_by_haz$d_haz_category), 
+     underweight_by_haz$c_d_underweight*100, type = "l", xaxt="n",
+     main= "D. Underweight (%) by HAZ category",
+     xlab= "Categories of HAZ",
+     ylab="Prevalence of Underweight (%)"
+     )
+
+points(as.numeric(underweight_by_haz$d_haz_category), 
+       underweight_by_haz$c_d_underweight*100,  xaxt = "n")
+axis(1, labels = as.character(underweight_by_haz$d_haz_category), 
+     at = as.numeric(underweight_by_haz$d_haz_category),
+     "Categories of HAZ")
+dev.off()
+
+
+```
+
+####f. Combined
+
+#####1. ggplot
+```{r}
+haz_whz_plot <- grid.arrange(state_haz_whz_plot,district_haz_whz_plot,
+                             ow_haz_plot,uw_haz_plot,
+                             ncol=2)
+ggsave(paste0("haz_whz_combined_ggplot",".png"), 
+       plot=haz_whz_plot,device="png",
+       path = path_india_data,scale=1.8)
+
+
+```
+
+#####2. mixed
+https://stackoverflow.com/questions/14124373/combine-base-and-ggplot-graphics-in-r-figure-window
+```{r}
+library(gridBase)
+png(paste0(path_india_data,"/haz_whz_combined_mixed.png")    
+    ,width=1600,height=1200,
+    units="px",pointsize = 20
+)
+
+plot.new()
+grid.newpage()
+pushViewport(viewport(layout = grid.layout(2, 2)))
+
+par(mfrow=c(2, 2))
+
+##State
+pushViewport(viewport(layout.pos.col = 1,layout.pos.row=1))
+print(state_haz_whz_plot, newpage = FALSE)
+popViewport()
+
+##State
+pushViewport(viewport(layout.pos.col = 2,layout.pos.row=1))
+print(district_haz_whz_plot, newpage = FALSE)
+popViewport()
+
+
+
+{
+  pushViewport(viewport(layout.pos.col = 1,layout.pos.row=2))
+  par(fig = gridFIG(), new = TRUE)
+  par(mar=c(5,5,3,5)
+      ,xaxs = "i",yaxs = "i",
+      mgp=c(2,1,0),las=1,
+      cex.axis=1.1
+      )
+  with(haz_proportion, barplot(height=prop_survey_weight,axes=F, names.arg = haz_proportion$d_haz_category))
+  axis(side = 4, cex.axis=1.3)
+  mtext(side = 4, line = 3, 'Density (%)',cex = 1.1,las=0)
+  
+  
+  par(new = T
+      ,xaxs = "i",yaxs = "i",cex.main=1.6, cex.axis=1.3
+      )
+  plot(as.numeric(overweight_by_haz$d_haz_category), 
+       overweight_by_haz$c_d_overweight*100, type = "l", xaxt="n",
+       ylab=NA,
+       xlab= NA,
+       cex.lab=1.3,
+       
+       ylim= c(0,4.5)
+  )
+  title("C. Overweight (%) by HAZ category",adj=0)
+  axis(side=2)
+  mtext(side=2,"Prevalence of Overweight (%)", line=2,cex=1.1,las=0)
+  
+  points(as.numeric(overweight_by_haz$d_haz_category), 
+         overweight_by_haz$c_d_overweight*100,  xaxt = "n",las=1)
+  # axis(1, labels = as.character(overweight_by_haz$d_haz_category), 
+  #      at = as.numeric(overweight_by_haz$d_haz_category))
+  mtext(side=1,"Categories of HAZ",line=3,cex=1.1)
+  popViewport()
+  
+}
+
+{
+ pushViewport(viewport(layout.pos.col = 2,layout.pos.row=2))
+  par(fig = gridFIG(), new = TRUE)
+  par(mar=c(5,5,3,5)
+      ,xaxs = "i",yaxs = "i",
+      mgp=c(2,1,0),las=1,
+      cex.axis=1.1
+      )
+  with(haz_proportion, barplot(height=prop_survey_weight,axes=F, names.arg = haz_proportion$d_haz_category))
+  axis(side = 4, cex.axis=1.3)
+  mtext(side = 4, line = 3, 'Density (%)',cex = 1.1,las=0)
+  
+  
+  par(new = T
+      ,xaxs = "i",yaxs = "i",cex.main=1.6, cex.axis=1.3
+      )
+  plot(as.numeric(underweight_by_haz$d_haz_category), 
+       underweight_by_haz$c_d_underweight*100, type = "l", xaxt="n",
+       ylab=NA,
+       xlab= NA,
+       cex.lab=1.3,
+       
+       ylim= c(0,50)
+  )
+  title("D. Underweight (%) by HAZ category",adj=0)
+  axis(side=2)
+  mtext(side=2,"Prevalence of Underweight (%)", line=3,cex=1.1,las=0)
+  
+  points(as.numeric(underweight_by_haz$d_haz_category), 
+         underweight_by_haz$c_d_underweight*100,  xaxt = "n",las=1)
+  # axis(1, labels = as.character(underweight_by_haz$d_haz_category), 
+  #      at = as.numeric(underweight_by_haz$d_haz_category))
+  mtext(side=1,"Categories of HAZ",line=3,cex=1.1)
+  popViewport()
+  
+}
+
+
+
+
+dev.off()
+
+
+```
+
