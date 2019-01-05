@@ -24,3 +24,6 @@ Among the 19 dual burdens examined, 8 had significant excess prevalence at the S
 
 Conclusions:   
 While dual burdens of anemia, stunting and underweight are prevalent, there is not yet evidence of clustering of overweight with other forms of malnutrition in India.    
+
+
+INSTRUCTIONS ON DELETING FILES: https://help.github.com/articles/removing-sensitive-data-from-a-repository/
