@@ -3,7 +3,7 @@ Malnutrition among women and children in India: limited evidence of clustering o
 
 Jithin Sam Varghese, Aryeh Stein
 
-Link: https://doi.org/10.1093/ajcn/nqy374
+Link: https://doi.org/10.1093/ajcn/nqy374  
 Journal: American Journal of Clinical Nutrition  
 Submitted: September 2018  
 Review 1: November 2018  
